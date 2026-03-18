@@ -71,6 +71,20 @@
     }
     #scrubber:disabled { opacity: 0.4; cursor: default; }
 
+    #pad-input {
+      width: 52px;
+      background: #1a1a1a;
+      border: 1px solid #444;
+      border-radius: 4px;
+      color: #eee;
+      font-size: 13px;
+      padding: 4px 6px;
+      outline: none;
+    }
+    #btn-align   { background: #555; color: #fff; }
+    #btn-export-z { background: #555; color: #fff; }
+    #btn-export-g { background: #555; color: #fff; }
+
     #status {
       font-size: 12px;
       color: #888;
@@ -170,10 +184,18 @@
       <button id="btn-play" disabled>▶</button>
       <button id="btn-clear">Clear</button>
       <button id="btn-export" disabled>Export</button>
+      <button id="btn-export-z" disabled>Export Z</button>
+      <button id="btn-export-g" disabled>Export G</button>
       <button id="btn-import">Import</button>
+      <button id="btn-import-z">Import Z</button>
+      <button id="btn-import-g">Import G</button>
       <input type="file" id="file-input" accept=".scrawl" style="display:none" />
+      <input type="file" id="file-input-z" accept=".scrawlz" style="display:none" />
+      <input type="file" id="file-input-g" accept=".scrawlg" style="display:none" />
       <span id="status"></span>
       <input type="range" id="scrubber" min="0" value="0" step="1" disabled />
+      <input type="number" id="pad-input" value="40" min="0" title="Padding (px)">
+      <button id="btn-align" disabled>Align</button>
     </div>
     <div id="stroke-list"><div id="no-strokes">No strokes yet</div></div>
   </div>
