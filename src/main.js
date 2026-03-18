@@ -9,13 +9,15 @@ const fileInput = document.getElementById('file-input');
 const status = document.getElementById('status');
 const strokeList = document.getElementById('stroke-list');
 const btnAlign = document.getElementById('btn-align');
+const btnAlignApply = document.getElementById('btn-align-apply');
+const btnSmooth = document.getElementById('btn-smooth');
+const smoothInput = document.getElementById('smooth-input');
+const btnCapDt = document.getElementById('btn-cap-dt');
+const capDtInput = document.getElementById('cap-dt-input');
 const padInput = document.getElementById('pad-input');
-const btnExportZ = document.getElementById('btn-export-z');
-const btnImportZ = document.getElementById('btn-import-z');
-const fileInputZ = document.getElementById('file-input-z');
-const btnExportG = document.getElementById('btn-export-g');
-const btnImportG = document.getElementById('btn-import-g');
-const fileInputG = document.getElementById('file-input-g');
+const btnExportGzip = document.getElementById('btn-export-gzip');
+const btnImportGzip = document.getElementById('btn-import-gzip');
+const fileInputGzip = document.getElementById('file-input-gzip');
 
 // strokes: Array<Array<{dx, dy, dt}>>
 // Every point is a delta from the previous point; prev starts at {x:0,y:0,t:0}
@@ -27,6 +29,8 @@ let lastAbsPt = null;                   // absolute position during active strok
 let startTime = 0;
 let replayHandle = null;
 let selectedStroke = null;
+
+let liveAbsPts = []; // absolute points of in-progress stroke, for smooth live redraw
 
 canvas.width = 1080;
 canvas.height = 1620;
@@ -79,11 +83,13 @@ function pointerPt(e) {
 
 canvas.addEventListener('pointerdown', e => {
   if (replayHandle !== null) return;
+  if (alignTransform.enabled) return;
   canvas.setPointerCapture(e.pointerId);
   if (strokes.length === 0 && currentStroke === null) startTime = performance.now();
   const pt = pointerPt(e);
   lastAbsPt = pt;
   currentStroke = [{ dx: pt.x - cursorAbs.x, dy: pt.y - cursorAbs.y, dt: pt.t - cursorAbs.t }];
+  liveAbsPts = [{ x: pt.x, y: pt.y }];
 });
 
 canvas.addEventListener('pointermove', e => {
@@ -91,9 +97,18 @@ canvas.addEventListener('pointermove', e => {
   const pt = pointerPt(e);
   const dx = pt.x - lastAbsPt.x, dy = pt.y - lastAbsPt.y;
   if (dx === 0 && dy === 0) return;
-  drawSegment(lastAbsPt, pt);
+  const prevAbsPt = lastAbsPt;
   currentStroke.push({ dx, dy, dt: pt.t - lastAbsPt.t });
   lastAbsPt = pt;
+  if (smoothMode) {
+    liveAbsPts.push({ x: pt.x, y: pt.y });
+    clearCanvas();
+    drawAllStrokes(strokes);
+    if (liveAbsPts.length >= 2) drawSmoothPath(liveAbsPts);
+    else drawDot(liveAbsPts[0]);
+  } else {
+    drawSegment(prevAbsPt, pt);
+  }
 });
 
 canvas.addEventListener('pointerup', () => {
@@ -104,9 +119,7 @@ canvas.addEventListener('pointerup', () => {
   lastAbsPt = null;
   currentStroke = null;
   btnExport.disabled = false;
-  btnExportZ.disabled = false;
-  btnExportG.disabled = false;
-  btnAlign.disabled = false;
+  btnExportGzip.disabled = false;
   updateScrubber();
   renderPanel();
 });
@@ -137,6 +150,44 @@ function toAbsolute(deltaStrokes) {
   return result;
 }
 
+let smoothMode = false;
+
+const dataTransforms = [];
+
+const capDtTransform = {
+  enabled: false,
+  button: btnCapDt,
+  apply(strokes) {
+    const max = +capDtInput.value;
+    return strokes.map(stroke =>
+      stroke.map(({ dx, dy, dt }) => ({ dx, dy, dt: Math.min(dt, max) }))
+    );
+  },
+};
+dataTransforms.push(capDtTransform);
+
+const alignTransform = {
+  enabled: false,
+  button: btnAlign,
+  apply(strokes) {
+    if (strokes.length === 0) return strokes;
+    const abs = toAbsolute(strokes);
+    let minX = Infinity, minY = Infinity;
+    for (const stroke of abs)
+      for (const pt of stroke) {
+        if (pt.x < minX) minX = pt.x;
+        if (pt.y < minY) minY = pt.y;
+      }
+    const offset = +padInput.value;
+    const first = strokes[0];
+    return [
+      [{ ...first[0], dx: first[0].dx + offset - minX, dy: first[0].dy + offset - minY }, ...first.slice(1)],
+      ...strokes.slice(1),
+    ];
+  },
+};
+dataTransforms.push(alignTransform);
+
 let replayAbsStrokes = null;
 let replayElapsed = 0;
 let replayDuration = 0;
@@ -146,18 +197,34 @@ function drawUpTo(elapsed) {
   for (const stroke of replayAbsStrokes) {
     if (stroke[0].t > elapsed) break;
     if (stroke.length === 1) { drawDot(stroke[0]); continue; }
-    ctx.beginPath();
-    ctx.moveTo(stroke[0].x, stroke[0].y);
-    for (let i = 1; i < stroke.length; i++) {
-      if (stroke[i].t > elapsed) break;
-      ctx.lineTo(stroke[i].x, stroke[i].y);
+    const pts = [];
+    for (const pt of stroke) {
+      if (pt.t > elapsed) break;
+      pts.push(pt);
     }
-    ctx.stroke();
+    if (pts.length >= 2) drawPath(pts);
   }
 }
 
+function getEffectiveStrokes() {
+  return dataTransforms
+    .filter(t => t.enabled)
+    .reduce((s, t) => t.apply(s), strokes);
+}
+
+function resetModes() {
+  for (const t of dataTransforms) {
+    t.enabled = false;
+    t.button.classList.remove('active');
+  }
+  canvas.classList.remove('no-draw');
+  btnAlignApply.disabled = true;
+  smoothMode = false;
+  btnSmooth.classList.remove('active');
+}
+
 function updateScrubber() {
-  replayAbsStrokes = toAbsolute(strokes);
+  replayAbsStrokes = toAbsolute(getEffectiveStrokes());
   replayDuration = replayAbsStrokes.flat().at(-1)?.t ?? 0;
   scrubber.max = replayDuration;
   scrubber.disabled = strokes.length === 0;
@@ -221,9 +288,7 @@ btnClear.addEventListener('click', () => {
   cursorAbs = { x: 0, y: 0, t: 0 };
   selectedStroke = null;
   btnExport.disabled = true;
-  btnExportZ.disabled = true;
-  btnExportG.disabled = true;
-  btnAlign.disabled = true;
+  btnExportGzip.disabled = true;
   status.textContent = '';
   updateScrubber();
   renderPanel();
@@ -248,6 +313,44 @@ function deserialize(text) {
   );
 }
 
+function drawRawPath(pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+}
+
+// Smooth pts in-place with a 1-2-1 weighted average, repeated `passes` times.
+// First and last points are pinned so endpoints are always exact.
+function smoothAverage(pts, passes = 3) {
+  if (pts.length <= 2) return pts;
+  let cur = pts;
+  for (let p = 0; p < passes; p++) {
+    const next = [cur[0]];
+    for (let i = 1; i < cur.length - 1; i++) {
+      next.push({
+        x: (cur[i - 1].x + 2 * cur[i].x + cur[i + 1].x) / 4,
+        y: (cur[i - 1].y + 2 * cur[i].y + cur[i + 1].y) / 4,
+      });
+    }
+    next.push(cur[cur.length - 1]);
+    cur = next;
+  }
+  return cur;
+}
+
+function drawSmoothPath(pts) {
+  const s = smoothAverage(pts, +smoothInput.value);
+  ctx.beginPath();
+  ctx.moveTo(s[0].x, s[0].y);
+  for (let i = 1; i < s.length; i++) ctx.lineTo(s[i].x, s[i].y);
+  ctx.stroke();
+}
+
+function drawPath(pts) {
+  smoothMode ? drawSmoothPath(pts) : drawRawPath(pts);
+}
+
 function drawAllStrokes(strokesToDraw) {
   let prev = { x: 0, y: 0 };
   for (const stroke of strokesToDraw) {
@@ -256,14 +359,12 @@ function drawAllStrokes(strokesToDraw) {
       drawDot(prev);
       continue;
     }
-    ctx.beginPath();
-    let first = true;
+    const pts = [];
     for (const { dx, dy } of stroke) {
       prev = { x: prev.x + dx, y: prev.y + dy };
-      if (first) { ctx.moveTo(prev.x, prev.y); first = false; }
-      else ctx.lineTo(prev.x, prev.y);
+      pts.push({ x: prev.x, y: prev.y });
     }
-    ctx.stroke();
+    drawPath(pts);
   }
 }
 
@@ -282,14 +383,12 @@ function renderHighlight() {
     prev = { x: prev.x + stroke[0].dx, y: prev.y + stroke[0].dy };
     drawDot(prev);
   } else {
-    ctx.beginPath();
-    let first = true;
+    const pts = [];
     for (const { dx, dy } of stroke) {
       prev = { x: prev.x + dx, y: prev.y + dy };
-      if (first) { ctx.moveTo(prev.x, prev.y); first = false; }
-      else ctx.lineTo(prev.x, prev.y);
+      pts.push({ x: prev.x, y: prev.y });
     }
-    ctx.stroke();
+    drawPath(pts);
   }
   ctx.restore();
 }
@@ -306,9 +405,7 @@ function deleteStroke(i) {
   cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
   selectedStroke = null;
   btnExport.disabled = strokes.length === 0;
-  btnExportZ.disabled = strokes.length === 0;
-  btnExportG.disabled = strokes.length === 0;
-  btnAlign.disabled = strokes.length === 0;
+  btnExportGzip.disabled = strokes.length === 0;
   updateScrubber();
   clearCanvas();
   drawAllStrokes(strokes);
@@ -318,7 +415,7 @@ function deleteStroke(i) {
 // --- Export ---
 
 btnExport.addEventListener('click', () => {
-  const text = serialize(strokes);
+  const text = serialize(getEffectiveStrokes());
   const blob = new Blob([text], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -336,15 +433,14 @@ fileInput.addEventListener('change', () => {
   if (!file) return;
   file.text().then(text => {
     stopReplay();
+    resetModes();
     strokes = deserialize(text);
     cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
     selectedStroke = null;
     clearCanvas();
     drawAllStrokes(strokes);
     btnExport.disabled = strokes.length === 0;
-    btnExportZ.disabled = strokes.length === 0;
-    btnExportG.disabled = strokes.length === 0;
-    btnAlign.disabled = strokes.length === 0;
+    btnExportGzip.disabled = strokes.length === 0;
     updateScrubber();
     fileInput.value = '';
     renderPanel();
@@ -403,7 +499,16 @@ strokeList.addEventListener('change', e => {
 // --- Align ---
 
 btnAlign.addEventListener('click', () => {
-  const padding = +padInput.value;
+  alignTransform.enabled = !alignTransform.enabled;
+  btnAlign.classList.toggle('active', alignTransform.enabled);
+  btnAlignApply.disabled = !alignTransform.enabled;
+  canvas.classList.toggle('no-draw', alignTransform.enabled);
+  updateScrubber();
+  clearCanvas();
+  drawAllStrokes(getEffectiveStrokes());
+});
+
+btnAlignApply.addEventListener('click', () => {
   const abs = toAbsolute(strokes);
   let minX = Infinity, minY = Infinity;
   for (const stroke of abs)
@@ -411,95 +516,28 @@ btnAlign.addEventListener('click', () => {
       if (pt.x < minX) minX = pt.x;
       if (pt.y < minY) minY = pt.y;
     }
-  strokes[0][0].dx += padding - minX;
-  strokes[0][0].dy += padding - minY;
+  strokes[0][0].dx += +padInput.value - minX;
+  strokes[0][0].dy += +padInput.value - minY;
+  cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
+  alignTransform.enabled = false;
+  btnAlign.classList.remove('active');
+  btnAlignApply.disabled = true;
+  canvas.classList.remove('no-draw');
   updateScrubber();
   clearCanvas();
   drawAllStrokes(strokes);
   renderPanel();
 });
 
-// --- Compressed format (.scrawlz) ---
-// Variable-length base-47 encoding using printable ASCII 33–126.
-// Chars 33–79 (47): terminal digit. Chars 80–126 (47): continuation digit.
-// Signed integers zig-zag encoded first. No separators — self-delimiting.
-// Typical mid-stroke point (dx=2, dy=-3, dt=16) → 3 chars vs "2,-3,16" (7 chars).
-
-function encodeUint(n) {
-  let s = '';
-  while (n >= 47) { s += String.fromCharCode(n % 47 + 80); n = Math.floor(n / 47); }
-  return s + String.fromCharCode(n + 33);
-}
-
-function decodeUint(str, pos) {
-  let value = 0, mult = 1;
-  while (true) {
-    const c = str.charCodeAt(pos++);
-    if (c >= 80) { value += (c - 80) * mult; mult *= 47; }
-    else         { value += (c - 33) * mult; return { value, pos }; }
-  }
-}
-
-function encodeInt(n)      { return encodeUint(n >= 0 ? n * 2 : -n * 2 - 1); }
-function decodeInt(str, pos) {
-  const { value: u, pos: p } = decodeUint(str, pos);
-  return { value: (u & 1) ? -(u + 1) >> 1 : u >> 1, pos: p };
-}
-
-function serializeZ(strokes) {
-  return strokes.map(stroke =>
-    stroke.map(({ dx, dy, dt }) => encodeInt(dx) + encodeInt(dy) + encodeUint(dt)).join('')
-  ).join('\n');
-}
-
-function deserializeZ(text) {
-  return text.split('\n').filter(l => l.trim()).map(line => {
-    const stroke = [];
-    let pos = 0;
-    while (pos < line.length) {
-      const { value: dx, pos: p1 } = decodeInt(line, pos);
-      const { value: dy, pos: p2 } = decodeInt(line, p1);
-      const { value: dt, pos: p3 } = decodeUint(line, p2);
-      stroke.push({ dx, dy, dt });
-      pos = p3;
-    }
-    return stroke;
-  });
-}
-
-btnExportZ.addEventListener('click', () => {
-  const text = serializeZ(strokes);
-  const blob = new Blob([text], { type: 'text/plain' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'drawing.scrawlz';
-  a.click();
-  URL.revokeObjectURL(a.href);
-});
-
-btnImportZ.addEventListener('click', () => fileInputZ.click());
-
-fileInputZ.addEventListener('change', () => {
-  const file = fileInputZ.files[0];
-  if (!file) return;
-  file.text().then(text => {
-    stopReplay();
-    strokes = deserializeZ(text);
-    cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
-    selectedStroke = null;
-    clearCanvas();
-    drawAllStrokes(strokes);
-    btnExport.disabled = false;
-    btnExportZ.disabled = false;
-    btnExportG.disabled = false;
-    btnAlign.disabled = false;
+padInput.addEventListener('input', () => {
+  if (alignTransform.enabled) {
     updateScrubber();
-    fileInputZ.value = '';
-    renderPanel();
-  });
+    clearCanvas();
+    drawAllStrokes(getEffectiveStrokes());
+  }
 });
 
-// --- Gzip format (.scrawlg) ---
+// --- Gzip format (.scrawlgzip) ---
 // Gzip-compresses the .scrawl text, then btoa-encodes the result.
 
 async function compressText(text) {
@@ -519,35 +557,62 @@ async function decompressText(b64) {
   return new Response(stream).text();
 }
 
-btnExportG.addEventListener('click', async () => {
-  const b64 = await compressText(serialize(strokes));
+btnExportGzip.addEventListener('click', async () => {
+  const b64 = await compressText(serialize(getEffectiveStrokes()));
   const blob = new Blob([b64], { type: 'text/plain' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'drawing.scrawlg';
+  a.download = 'drawing.scrawl.gz';
   a.click();
   URL.revokeObjectURL(a.href);
 });
 
-btnImportG.addEventListener('click', () => fileInputG.click());
+btnImportGzip.addEventListener('click', () => fileInputGzip.click());
 
-fileInputG.addEventListener('change', () => {
-  const file = fileInputG.files[0];
+fileInputGzip.addEventListener('change', () => {
+  const file = fileInputGzip.files[0];
   if (!file) return;
   file.text().then(async b64 => {
     const text = await decompressText(b64);
     stopReplay();
+    resetModes();
     strokes = deserialize(text);
     cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
     selectedStroke = null;
     clearCanvas();
     drawAllStrokes(strokes);
     btnExport.disabled = false;
-    btnExportZ.disabled = false;
-    btnExportG.disabled = false;
-    btnAlign.disabled = false;
+    btnExportGzip.disabled = false;
     updateScrubber();
-    fileInputG.value = '';
+    fileInputGzip.value = '';
     renderPanel();
   });
+});
+
+// --- Draw mode ---
+
+btnCapDt.addEventListener('click', () => {
+  capDtTransform.enabled = !capDtTransform.enabled;
+  btnCapDt.classList.toggle('active', capDtTransform.enabled);
+  updateScrubber();
+});
+
+capDtInput.addEventListener('input', () => {
+  if (capDtTransform.enabled) updateScrubber();
+});
+
+btnSmooth.addEventListener('click', () => {
+  smoothMode = !smoothMode;
+  btnSmooth.classList.toggle('active', smoothMode);
+  clearCanvas();
+  drawAllStrokes(strokes);
+  if (selectedStroke !== null) renderHighlight();
+});
+
+smoothInput.addEventListener('input', () => {
+  if (smoothMode) {
+    clearCanvas();
+    drawAllStrokes(strokes);
+    if (selectedStroke !== null) renderHighlight();
+  }
 });

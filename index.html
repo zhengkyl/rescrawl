@@ -9,10 +9,17 @@
 
     body {
       display: flex;
+      flex-direction: column;
       height: 100vh;
       overflow: hidden;
       font-family: sans-serif;
       background: #1a1a1a;
+    }
+
+    #main-area {
+      flex: 1;
+      display: flex;
+      min-height: 0;
     }
 
     #canvas-area {
@@ -29,6 +36,7 @@
       width: 100%;
       aspect-ratio: 2 / 3;
     }
+    #canvas.no-draw { cursor: not-allowed; }
 
     #panel {
       width: 240px;
@@ -45,6 +53,15 @@
       gap: 8px;
       padding: 12px;
       border-bottom: 1px solid #333;
+    }
+
+    #bottom-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #222;
+      border-top: 1px solid #333;
     }
 
     button {
@@ -65,14 +82,26 @@
     #btn-import  { background: #555; color: #fff; }
 
     #scrubber {
-      width: 100%;
+      flex: 1;
       accent-color: #4f8ef7;
       cursor: pointer;
     }
     #scrubber:disabled { opacity: 0.4; cursor: default; }
 
-    #pad-input {
-      width: 52px;
+    #btn-smooth, #btn-cap-dt, #btn-align, #btn-align-apply { background: #555; color: #fff; }
+    #btn-smooth.active, #btn-cap-dt.active, #btn-align.active { background: #4f8ef7; }
+
+    .section-label {
+      width: 100%;
+      font-size: 11px;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .btn-row button, .btn-row input[type="number"] { flex: 1; min-width: 0; }
+    .btn-row input[type="number"] {
       background: #1a1a1a;
       border: 1px solid #444;
       border-radius: 4px;
@@ -81,9 +110,14 @@
       padding: 4px 6px;
       outline: none;
     }
-    #btn-align   { background: #555; color: #fff; }
-    #btn-export-z { background: #555; color: #fff; }
-    #btn-export-g { background: #555; color: #fff; }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+    }
+    .btn-row button { flex: 1; }
+    #btn-export-gzip { background: #555; color: #fff; }
 
     #status {
       font-size: 12px;
@@ -176,28 +210,48 @@
   </style>
 </head>
 <body>
-  <div id="canvas-area">
-    <canvas id="canvas"></canvas>
-  </div>
-  <div id="panel">
-    <div id="controls">
-      <button id="btn-play" disabled>▶</button>
-      <button id="btn-clear">Clear</button>
-      <button id="btn-export" disabled>Export</button>
-      <button id="btn-export-z" disabled>Export Z</button>
-      <button id="btn-export-g" disabled>Export G</button>
-      <button id="btn-import">Import</button>
-      <button id="btn-import-z">Import Z</button>
-      <button id="btn-import-g">Import G</button>
-      <input type="file" id="file-input" accept=".scrawl" style="display:none" />
-      <input type="file" id="file-input-z" accept=".scrawlz" style="display:none" />
-      <input type="file" id="file-input-g" accept=".scrawlg" style="display:none" />
-      <span id="status"></span>
-      <input type="range" id="scrubber" min="0" value="0" step="1" disabled />
-      <input type="number" id="pad-input" value="40" min="0" title="Padding (px)">
-      <button id="btn-align" disabled>Align</button>
+  <div id="main-area">
+    <div id="canvas-area">
+      <canvas id="canvas"></canvas>
     </div>
-    <div id="stroke-list"><div id="no-strokes">No strokes yet</div></div>
+    <div id="panel">
+      <div id="controls">
+        <div class="btn-row">
+          <button id="btn-import">Import</button>
+          <button id="btn-export" disabled>Export</button>
+        </div>
+        <div class="btn-row">
+          <button id="btn-import-gzip">Import Gzip</button>
+          <button id="btn-export-gzip" disabled>Export Gzip</button>
+        </div>
+        <input type="file" id="file-input" accept=".scrawl" style="display:none" />
+        <input type="file" id="file-input-gzip" accept=".scrawl.gz" style="display:none" />
+        <span id="status"></span>
+        <div class="section-label">Transformations</div>
+        <div class="btn-row">
+          <button id="btn-smooth">Smooth</button>
+          <input type="number" id="smooth-input" value="3" min="1" title="Smooth passes">
+        </div>
+        <div class="btn-row">
+          <button id="btn-cap-dt">Cap dt</button>
+          <input type="number" id="cap-dt-input" value="1000" min="1" title="Max dt (ms)">
+        </div>
+        <div class="section-label">Layout</div>
+        <div class="btn-row">
+          <button id="btn-align">Align</button>
+          <input type="number" id="pad-input" value="40" min="0" title="Padding (px)">
+        </div>
+        <div class="btn-row">
+          <button id="btn-align-apply" disabled>Apply</button>
+        </div>
+      </div>
+      <div id="stroke-list"><div id="no-strokes">No strokes yet</div></div>
+    </div>
+  </div>
+  <div id="bottom-bar">
+    <button id="btn-play" disabled>▶</button>
+    <input type="range" id="scrubber" min="0" value="0" step="1" disabled />
+    <button id="btn-clear">Clear</button>
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>
