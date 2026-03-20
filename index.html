@@ -161,17 +161,25 @@
       letter-spacing: 0.05em;
     }
 
-    .btn-delete {
+    .stroke-actions {
+      display: flex;
+      gap: 2px;
+      align-items: center;
+    }
+
+    .btn-delete, .btn-move-up, .btn-move-down {
       background: none;
       border: none;
       color: #666;
-      font-size: 16px;
+      font-size: 14px;
       line-height: 1;
       padding: 0 2px;
       cursor: pointer;
       border-radius: 3px;
     }
+    .btn-delete { font-size: 16px; }
     .btn-delete:hover { color: #e55; }
+    .btn-move-up:hover:not(:disabled), .btn-move-down:hover:not(:disabled) { color: #4f8ef7; }
 
     .stroke-fields {
       display: grid;
@@ -207,6 +215,26 @@
       text-align: center;
       margin-top: 20px;
     }
+
+    .stroke-cursor {
+      height: 22px;
+      cursor: pointer;
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .stroke-cursor::before {
+      content: '';
+      position: absolute;
+      left: 0; right: 0;
+      height: 2px;
+      border-radius: 1px;
+      background: #4f8ef7;
+      opacity: 0;
+      transition: opacity 0.1s;
+    }
+    .stroke-cursor:hover::before { opacity: 0.4; }
+    .stroke-cursor.active::before { opacity: 1; }
   </style>
 </head>
 <body>
@@ -234,12 +262,15 @@
         </div>
         <div class="btn-row">
           <button id="btn-cap-dt">Cap dt</button>
-          <input type="number" id="cap-dt-input" value="1000" min="1" title="Max dt (ms)">
+          <input type="number" id="cap-dt-input" value="2000" min="1" title="Max dt (ms)">
         </div>
         <div class="section-label">Layout</div>
         <div class="btn-row">
           <button id="btn-align">Align</button>
-          <input type="number" id="pad-input" value="40" min="0" title="Padding (px)">
+        </div>
+        <div class="btn-row">
+          <input type="number" id="pad-x-input" value="40" min="0" title="Padding x (px)" placeholder="x">
+          <input type="number" id="pad-y-input" value="20" min="0" title="Padding y (px)" placeholder="y">
         </div>
         <div class="btn-row">
           <button id="btn-align-apply" disabled>Apply</button>

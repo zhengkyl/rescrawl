@@ -14,7 +14,8 @@ const btnSmooth = document.getElementById('btn-smooth');
 const smoothInput = document.getElementById('smooth-input');
 const btnCapDt = document.getElementById('btn-cap-dt');
 const capDtInput = document.getElementById('cap-dt-input');
-const padInput = document.getElementById('pad-input');
+const padXInput = document.getElementById('pad-x-input');
+const padYInput = document.getElementById('pad-y-input');
 const btnExportGzip = document.getElementById('btn-export-gzip');
 const btnImportGzip = document.getElementById('btn-import-gzip');
 const fileInputGzip = document.getElementById('file-input-gzip');
@@ -29,6 +30,7 @@ let lastAbsPt = null;                   // absolute position during active strok
 let startTime = 0;
 let replayHandle = null;
 let selectedStroke = null;
+let insertionPoint = 0; // index in [0..strokes.length]; default is strokes.length (end)
 
 let liveAbsPts = []; // absolute points of in-progress stroke, for smooth live redraw
 
@@ -88,7 +90,8 @@ canvas.addEventListener('pointerdown', e => {
   if (strokes.length === 0 && currentStroke === null) startTime = performance.now();
   const pt = pointerPt(e);
   lastAbsPt = pt;
-  currentStroke = [{ dx: pt.x - cursorAbs.x, dy: pt.y - cursorAbs.y, dt: pt.t - cursorAbs.t }];
+  const insertAbs = getInsertionAbs(insertionPoint);
+  currentStroke = [{ dx: pt.x - insertAbs.x, dy: pt.y - insertAbs.y, dt: pt.t - insertAbs.t }];
   liveAbsPts = [{ x: pt.x, y: pt.y }];
 });
 
@@ -106,6 +109,7 @@ canvas.addEventListener('pointermove', e => {
     drawAllStrokes(strokes);
     if (liveAbsPts.length >= 2) drawSmoothPath(liveAbsPts);
     else drawDot(liveAbsPts[0]);
+    drawInsertionCrosshair();
   } else {
     drawSegment(prevAbsPt, pt);
   }
@@ -114,13 +118,22 @@ canvas.addEventListener('pointermove', e => {
 canvas.addEventListener('pointerup', () => {
   if (currentStroke === null) return;
   if (currentStroke.length === 1) drawDot(lastAbsPt);
-  strokes.push(currentStroke);
+  const k = insertionPoint;
+  strokes.splice(k, 0, currentStroke);
+  if (k + 1 < strokes.length) {
+    let sumDx = 0, sumDy = 0;
+    for (const { dx, dy } of currentStroke) { sumDx += dx; sumDy += dy; }
+    strokes[k + 1][0].dx -= sumDx;
+    strokes[k + 1][0].dy -= sumDy;
+  }
+  insertionPoint = k + 1;
   cursorAbs = lastAbsPt;
   lastAbsPt = null;
   currentStroke = null;
   btnExport.disabled = false;
   btnExportGzip.disabled = false;
   updateScrubber();
+  renderHighlight();
   renderPanel();
 });
 
@@ -128,7 +141,15 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 canvas.addEventListener('pointercancel', () => {
   if (currentStroke === null) return;
-  strokes.push(currentStroke);
+  const k = insertionPoint;
+  strokes.splice(k, 0, currentStroke);
+  if (k + 1 < strokes.length) {
+    let sumDx = 0, sumDy = 0;
+    for (const { dx, dy } of currentStroke) { sumDx += dx; sumDy += dy; }
+    strokes[k + 1][0].dx -= sumDx;
+    strokes[k + 1][0].dy -= sumDy;
+  }
+  insertionPoint = k + 1;
   cursorAbs = lastAbsPt;
   lastAbsPt = null;
   currentStroke = null;
@@ -148,6 +169,13 @@ function toAbsolute(deltaStrokes) {
     result.push(abs);
   }
   return result;
+}
+
+function getInsertionAbs(k) {
+  let pos = { x: 0, y: 0, t: 0 };
+  for (let i = 0; i < k; i++)
+    for (const { dx, dy, dt } of strokes[i]) { pos.x += dx; pos.y += dy; pos.t += dt; }
+  return pos;
 }
 
 let smoothMode = false;
@@ -178,10 +206,9 @@ const alignTransform = {
         if (pt.x < minX) minX = pt.x;
         if (pt.y < minY) minY = pt.y;
       }
-    const offset = +padInput.value;
     const first = strokes[0];
     return [
-      [{ ...first[0], dx: first[0].dx + offset - minX, dy: first[0].dy + offset - minY }, ...first.slice(1)],
+      [{ ...first[0], dx: first[0].dx + +padXInput.value - minX, dy: first[0].dy + +padYInput.value - minY }, ...first.slice(1)],
       ...strokes.slice(1),
     ];
   },
@@ -287,6 +314,7 @@ btnClear.addEventListener('click', () => {
   currentStroke = null;
   cursorAbs = { x: 0, y: 0, t: 0 };
   selectedStroke = null;
+  insertionPoint = 0;
   btnExport.disabled = true;
   btnExportGzip.disabled = true;
   status.textContent = '';
@@ -368,29 +396,86 @@ function drawAllStrokes(strokesToDraw) {
   }
 }
 
+function drawInsertionCrosshair() {
+  if (strokes.length === 0 || insertionPoint >= strokes.length) return;
+  const { x, y } = getInsertionAbs(insertionPoint);
+  const size = 12;
+  ctx.save();
+  ctx.strokeStyle = '#4f8ef7';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x - size, y);
+  ctx.lineTo(x + size, y);
+  ctx.moveTo(x, y - size);
+  ctx.lineTo(x, y + size);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function renderHighlight() {
   clearCanvas();
   drawAllStrokes(strokes);
-  if (selectedStroke === null) return;
-  const stroke = strokes[selectedStroke];
-  let prev = { x: 0, y: 0 };
-  for (let i = 0; i < selectedStroke; i++)
-    for (const { dx, dy } of strokes[i]) prev = { x: prev.x + dx, y: prev.y + dy };
-  ctx.save();
-  ctx.strokeStyle = '#4f8ef7';
-  ctx.lineWidth = 3;
-  if (stroke.length === 1) {
-    prev = { x: prev.x + stroke[0].dx, y: prev.y + stroke[0].dy };
-    drawDot(prev);
-  } else {
-    const pts = [];
-    for (const { dx, dy } of stroke) {
-      prev = { x: prev.x + dx, y: prev.y + dy };
-      pts.push({ x: prev.x, y: prev.y });
+  if (selectedStroke !== null) {
+    const stroke = strokes[selectedStroke];
+    let prev = { x: 0, y: 0 };
+    for (let i = 0; i < selectedStroke; i++)
+      for (const { dx, dy } of strokes[i]) prev = { x: prev.x + dx, y: prev.y + dy };
+    ctx.save();
+    ctx.strokeStyle = '#4f8ef7';
+    ctx.lineWidth = 3;
+    if (stroke.length === 1) {
+      prev = { x: prev.x + stroke[0].dx, y: prev.y + stroke[0].dy };
+      drawDot(prev);
+    } else {
+      const pts = [];
+      for (const { dx, dy } of stroke) {
+        prev = { x: prev.x + dx, y: prev.y + dy };
+        pts.push({ x: prev.x, y: prev.y });
+      }
+      drawPath(pts);
     }
-    drawPath(pts);
+    ctx.restore();
   }
-  ctx.restore();
+  drawInsertionCrosshair();
+}
+
+function swapAdjacentStrokes(i) {
+  // Swap strokes[i] and strokes[i+1], preserving absolute canvas positions.
+  // Recalculates dx/dy of first points for the two swapped strokes and the
+  // following stroke; dt is never touched.
+  const j = i + 1;
+  if (j >= strokes.length) return;
+
+  const A = strokes[i], B = strokes[j];
+
+  let sumAdx = 0, sumAdy = 0;
+  for (const { dx, dy } of A) { sumAdx += dx; sumAdy += dy; }
+  let sumBdx = 0, sumBdy = 0;
+  for (const { dx, dy } of B) { sumBdx += dx; sumBdy += dy; }
+
+  // B goes to position i (now starts relative to prevEnd instead of eA)
+  const newBdx = sumAdx + B[0].dx;
+  const newBdy = sumAdy + B[0].dy;
+  // A goes to position j (now starts relative to eB instead of prevEnd)
+  const newAdx = A[0].dx - sumAdx - sumBdx;
+  const newAdy = A[0].dy - sumAdy - sumBdy;
+
+  strokes[i] = B;
+  strokes[j] = A;
+  strokes[i][0] = { ...strokes[i][0], dx: newBdx, dy: newBdy };
+  strokes[j][0] = { ...strokes[j][0], dx: newAdx, dy: newAdy };
+
+  // The stroke after j (C) now follows A (ends at eA) instead of B (ends at eB)
+  if (j + 1 < strokes.length) {
+    const C = strokes[j + 1];
+    C[0] = { ...C[0], dx: C[0].dx + sumBdx, dy: C[0].dy + sumBdy };
+  }
+
+  cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
+  updateScrubber();
+  renderHighlight();
+  renderPanel();
 }
 
 function deleteStroke(i) {
@@ -402,13 +487,13 @@ function deleteStroke(i) {
     strokes[i + 1][0].dt += sumDt;
   }
   strokes.splice(i, 1);
+  if (insertionPoint > i) insertionPoint--;
   cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
   selectedStroke = null;
   btnExport.disabled = strokes.length === 0;
   btnExportGzip.disabled = strokes.length === 0;
   updateScrubber();
-  clearCanvas();
-  drawAllStrokes(strokes);
+  renderHighlight();
   renderPanel();
 }
 
@@ -437,11 +522,11 @@ fileInput.addEventListener('change', () => {
     strokes = deserialize(text);
     cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
     selectedStroke = null;
-    clearCanvas();
-    drawAllStrokes(strokes);
+    insertionPoint = strokes.length;
     btnExport.disabled = strokes.length === 0;
     btnExportGzip.disabled = strokes.length === 0;
     updateScrubber();
+    renderHighlight();
     fileInput.value = '';
     renderPanel();
   });
@@ -454,7 +539,14 @@ function renderPanel() {
     strokeList.innerHTML = '<div id="no-strokes">No strokes yet</div>';
     return;
   }
+  function makeCursor(pos) {
+    const d = document.createElement('div');
+    d.className = 'stroke-cursor' + (pos === insertionPoint ? ' active' : '');
+    d.dataset.pos = pos;
+    return d;
+  }
   strokeList.innerHTML = '';
+  strokeList.appendChild(makeCursor(0));
   strokes.forEach((stroke, i) => {
     const { dx, dy, dt } = stroke[0];
     const row = document.createElement('div');
@@ -463,7 +555,11 @@ function renderPanel() {
     row.innerHTML = `
       <div class="stroke-header">
         <div class="stroke-label">Stroke ${i + 1}</div>
-        <button class="btn-delete" data-stroke="${i}">×</button>
+        <div class="stroke-actions">
+          <button class="btn-move-up" data-stroke="${i}" ${i === 0 ? 'disabled' : ''}>↑</button>
+          <button class="btn-move-down" data-stroke="${i}" ${i === strokes.length - 1 ? 'disabled' : ''}>↓</button>
+          <button class="btn-delete" data-stroke="${i}">×</button>
+        </div>
       </div>
       <div class="stroke-fields">
         <label>dx<input type="number" value="${dx}" data-stroke="${i}" data-field="dx"></label>
@@ -472,12 +568,36 @@ function renderPanel() {
       </div>
     `;
     strokeList.appendChild(row);
+    strokeList.appendChild(makeCursor(i + 1));
   });
 }
 
 strokeList.addEventListener('click', e => {
+  const cursorEl = e.target.closest('.stroke-cursor');
+  if (cursorEl) {
+    insertionPoint = +cursorEl.dataset.pos;
+    renderHighlight();
+    renderPanel();
+    return;
+  }
   const deleteBtn = e.target.closest('.btn-delete');
   if (deleteBtn) { deleteStroke(+deleteBtn.dataset.stroke); return; }
+  const moveUpBtn = e.target.closest('.btn-move-up');
+  if (moveUpBtn) {
+    const i = +moveUpBtn.dataset.stroke;
+    swapAdjacentStrokes(i - 1);
+    if (selectedStroke === i) selectedStroke = i - 1;
+    else if (selectedStroke === i - 1) selectedStroke = i;
+    return;
+  }
+  const moveDownBtn = e.target.closest('.btn-move-down');
+  if (moveDownBtn) {
+    const i = +moveDownBtn.dataset.stroke;
+    swapAdjacentStrokes(i);
+    if (selectedStroke === i) selectedStroke = i + 1;
+    else if (selectedStroke === i + 1) selectedStroke = i;
+    return;
+  }
   const row = e.target.closest('.stroke-row');
   if (!row || e.target.tagName === 'INPUT') return;
   const i = +row.dataset.stroke;
@@ -506,6 +626,7 @@ btnAlign.addEventListener('click', () => {
   updateScrubber();
   clearCanvas();
   drawAllStrokes(getEffectiveStrokes());
+  drawInsertionCrosshair();
 });
 
 btnAlignApply.addEventListener('click', () => {
@@ -516,26 +637,28 @@ btnAlignApply.addEventListener('click', () => {
       if (pt.x < minX) minX = pt.x;
       if (pt.y < minY) minY = pt.y;
     }
-  strokes[0][0].dx += +padInput.value - minX;
-  strokes[0][0].dy += +padInput.value - minY;
+  strokes[0][0].dx += +padXInput.value - minX;
+  strokes[0][0].dy += +padYInput.value - minY;
   cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
   alignTransform.enabled = false;
   btnAlign.classList.remove('active');
   btnAlignApply.disabled = true;
   canvas.classList.remove('no-draw');
   updateScrubber();
-  clearCanvas();
-  drawAllStrokes(strokes);
+  renderHighlight();
   renderPanel();
 });
 
-padInput.addEventListener('input', () => {
+function onPadInput() {
   if (alignTransform.enabled) {
     updateScrubber();
     clearCanvas();
     drawAllStrokes(getEffectiveStrokes());
+    drawInsertionCrosshair();
   }
-});
+}
+padXInput.addEventListener('input', onPadInput);
+padYInput.addEventListener('input', onPadInput);
 
 // --- Gzip format (.scrawlgzip) ---
 // Gzip-compresses the .scrawl text, then btoa-encodes the result.
@@ -579,11 +702,11 @@ fileInputGzip.addEventListener('change', () => {
     strokes = deserialize(text);
     cursorAbs = toAbsolute(strokes).flat().at(-1) ?? { x: 0, y: 0, t: 0 };
     selectedStroke = null;
-    clearCanvas();
-    drawAllStrokes(strokes);
+    insertionPoint = strokes.length;
     btnExport.disabled = false;
     btnExportGzip.disabled = false;
     updateScrubber();
+    renderHighlight();
     fileInputGzip.value = '';
     renderPanel();
   });
@@ -604,15 +727,9 @@ capDtInput.addEventListener('input', () => {
 btnSmooth.addEventListener('click', () => {
   smoothMode = !smoothMode;
   btnSmooth.classList.toggle('active', smoothMode);
-  clearCanvas();
-  drawAllStrokes(strokes);
-  if (selectedStroke !== null) renderHighlight();
+  renderHighlight();
 });
 
 smoothInput.addEventListener('input', () => {
-  if (smoothMode) {
-    clearCanvas();
-    drawAllStrokes(strokes);
-    if (selectedStroke !== null) renderHighlight();
-  }
+  if (smoothMode) renderHighlight();
 });
