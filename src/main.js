@@ -44,18 +44,23 @@ ctx.lineJoin = 'round';
 
 // --- Drawing ---
 const LINE_SPACING = 40;
+let showGuidelines = true;
+const btnGuidelines = document.getElementById('btn-guidelines');
+
 function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.save();
-  ctx.strokeStyle = '#c8d8f0';
-  ctx.lineWidth = 1;
-  for (let y = LINE_SPACING; y < canvas.height; y += LINE_SPACING) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-    ctx.stroke();
+  if (showGuidelines) {
+    ctx.save();
+    ctx.strokeStyle = '#c8d8f0';
+    ctx.lineWidth = 1;
+    for (let y = LINE_SPACING; y < canvas.height; y += LINE_SPACING) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 clearCanvas();
@@ -722,6 +727,12 @@ btnCapDt.addEventListener('click', () => {
 
 capDtInput.addEventListener('input', () => {
   if (capDtTransform.enabled) updateScrubber();
+});
+
+btnGuidelines.addEventListener('click', () => {
+  showGuidelines = !showGuidelines;
+  btnGuidelines.classList.toggle('active', showGuidelines);
+  renderHighlight();
 });
 
 btnSmooth.addEventListener('click', () => {
