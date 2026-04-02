@@ -2,6 +2,7 @@
 	"name": "rescrawl",
 	"private": true,
 	"type": "module",
+	"packageManager": "pnpm@10.28.0",
 	"scripts": {
 		"dev": "vite",
 		"build": "vite build",
