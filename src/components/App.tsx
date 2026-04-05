@@ -2,10 +2,10 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import {
   DEFAULT_CONFIG,
   toAbsolute, getInsertionAbs,
-  serialize, deserialize, compressText, decompressText,
+  serialize, serializeBallpoint, deserialize, compressText, decompressText,
   getEffectiveStrokes, alignApply,
 } from '../utils';
-import type { Stroke, AbsStroke, AbsPoint, Config } from '../utils';
+import type { Stroke, AbsStroke, Config } from '../utils';
 import { AppContext } from '../context';
 import {
   clearCanvas, drawAllStrokes, drawDot, drawPath,
@@ -33,12 +33,15 @@ const DEFAULT_TRANSFORMS: Transforms = {
   align: false, padX: 40, padY: 40,
 };
 
-function pointerPt(canvas: HTMLCanvasElement, e: PointerEvent, startTime: number): AbsPoint {
+function pointerPt(canvas: HTMLCanvasElement, e: PointerEvent, startTime: number) {
   const scale = canvas.width / canvas.offsetWidth;
   return {
     x: Math.round(e.offsetX * scale),
     y: Math.round(e.offsetY * scale),
     t: Math.round(performance.now() - startTime),
+    pressure: Math.round(e.pressure * 8192),
+    tiltX: e.tiltX,
+    tiltY: e.tiltY,
   };
 }
 
@@ -47,7 +50,7 @@ export function App() {
   const canvasRef        = useRef<HTMLCanvasElement>(null);
   const ctxRef           = useRef<CanvasRenderingContext2D | null>(null);
   const currentStrokeRef = useRef<Stroke | null>(null);
-  const lastAbsPtRef     = useRef<AbsPoint | null>(null);
+  const lastAbsPtRef     = useRef<ReturnType<typeof pointerPt> | null>(null);
   const liveAbsPtsRef    = useRef<{ x: number; y: number }[]>([]);
   const startTimeRef     = useRef(0);
   const rafRef           = useRef<number | null>(null);
@@ -184,7 +187,7 @@ export function App() {
     const pt = pointerPt(canvasRef.current!, e, startTimeRef.current);
     lastAbsPtRef.current = pt;
     const insertAbs = getInsertionAbs(strokes, insertionPoint);
-    currentStrokeRef.current = [{ dx: pt.x - insertAbs.x, dy: pt.y - insertAbs.y, dt: pt.t - insertAbs.t }];
+    currentStrokeRef.current = [{ dx: pt.x - insertAbs.x, dy: pt.y - insertAbs.y, dt: pt.t - insertAbs.t, pressure: pt.pressure, tiltX: pt.tiltX, tiltY: pt.tiltY }];
     liveAbsPtsRef.current = [{ x: pt.x, y: pt.y }];
   }
 
@@ -195,7 +198,7 @@ export function App() {
     const last = lastAbsPtRef.current!;
     const dx = pt.x - last.x, dy = pt.y - last.y;
     if (dx === 0 && dy === 0) return;
-    currentStrokeRef.current.push({ dx, dy, dt: pt.t - last.t });
+    currentStrokeRef.current.push({ dx, dy, dt: pt.t - last.t, pressure: pt.pressure, tiltX: pt.tiltX, tiltY: pt.tiltY });
     const prev = last;
     lastAbsPtRef.current = pt;
     if (transforms.smooth) {
@@ -337,9 +340,10 @@ export function App() {
     redraw(imported, null, imported.length, nextTr);
   }
 
-  async function handleExport(filename: string, gzip: boolean) {
+  async function handleExport(filename: string, gzip: boolean, ballpoint: boolean) {
     const cfg = { capDtEnabled: transforms.capDt, capDtMax: transforms.capDtMax, alignEnabled: transforms.align, padX: transforms.padX, padY: transforms.padY };
-    const text = serialize(getEffectiveStrokes(strokes, cfg));
+    const effective = getEffectiveStrokes(strokes, cfg);
+    const text = ballpoint ? serializeBallpoint(effective) : serialize(effective);
     const content = gzip ? await compressText(text) : text;
     const blob = new Blob([content], { type: 'text/plain' });
     const a = document.createElement('a');

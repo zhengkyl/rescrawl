@@ -1,4 +1,4 @@
-export type Point = { dx: number; dy: number; dt: number };
+export type Point = { dx: number; dy: number; dt: number; pressure: number; tiltX: number; tiltY: number };
 export type Stroke = Point[];
 export type AbsPoint = { x: number; y: number; t: number };
 export type AbsStroke = AbsPoint[];
@@ -37,7 +37,7 @@ export function getInsertionAbs(strokes: Stroke[], k: number): AbsPoint {
 
 export function capDtApply(strokes: Stroke[], max: number): Stroke[] {
   return strokes.map(stroke =>
-    stroke.map(({ dx, dy, dt }) => ({ dx, dy, dt: Math.min(dt, max) }))
+    stroke.map(pt => ({ ...pt, dt: Math.min(pt.dt, max) }))
   );
 }
 
@@ -93,17 +93,27 @@ export function smoothAverage(pts: { x: number; y: number }[], passes = 3) {
 
 // --- Serialization ---
 
-export function serialize(strokes: Stroke[]): string {
+export function serializeBallpoint(strokes: Stroke[]): string {
   return strokes.map(stroke =>
     stroke.map(({ dx, dy, dt }) => `${dx},${dy},${dt}`).join(';')
+  ).join('\n');
+}
+
+export function serialize(strokes: Stroke[]): string {
+  return strokes.map(stroke =>
+    stroke.map(({ dx, dy, dt, pressure, tiltX, tiltY }) => `${dx},${dy},${dt},${pressure},${tiltX},${tiltY}`).join(';')
   ).join('\n');
 }
 
 export function deserialize(text: string): Stroke[] {
   return text.split('\n').filter(line => line.trim() !== '').map(line =>
     line.split(';').map(token => {
-      const [dx, dy, dt] = token.split(',').map(Number);
-      return { dx, dy, dt };
+      const parts = token.split(',').map(Number);
+      const [dx, dy, dt] = parts;
+      const pressure = parts[3] ?? 0;
+      const tiltX = parts[4] ?? 0;
+      const tiltY = parts[5] ?? 0;
+      return { dx, dy, dt, pressure, tiltX, tiltY };
     })
   );
 }
