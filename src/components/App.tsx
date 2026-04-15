@@ -33,6 +33,78 @@ const DEFAULT_TRANSFORMS: Transforms = {
   align: false, padX: 40, padY: 40,
 };
 
+// --- Pure stroke mutation functions ---
+
+function applyDraw(s: Stroke[], index: number, stroke: Stroke): Stroke[] {
+  const next = [...s];
+  next.splice(index, 0, stroke);
+  if (index + 1 < next.length) {
+    let sumDx = 0, sumDy = 0;
+    for (const { dx, dy } of stroke) { sumDx += dx; sumDy += dy; }
+    next[index + 1] = [{ ...next[index + 1][0], dx: next[index + 1][0].dx - sumDx, dy: next[index + 1][0].dy - sumDy }, ...next[index + 1].slice(1)];
+  }
+  return next;
+}
+
+function applyDelete(s: Stroke[], index: number): Stroke[] {
+  const next = [...s];
+  if (index + 1 < next.length) {
+    let sumDx = 0, sumDy = 0, sumDt = 0;
+    for (const { dx, dy, dt } of next[index]) { sumDx += dx; sumDy += dy; sumDt += dt; }
+    next[index + 1] = [{ ...next[index + 1][0], dx: next[index + 1][0].dx + sumDx, dy: next[index + 1][0].dy + sumDy, dt: next[index + 1][0].dt + sumDt }, ...next[index + 1].slice(1)];
+  }
+  next.splice(index, 1);
+  return next;
+}
+
+function applySwap(s: Stroke[], index: number): Stroke[] {
+  const j = index + 1;
+  if (j >= s.length) return s;
+  const A = s[index], B = s[j];
+  let sumAdx = 0, sumAdy = 0;
+  for (const { dx, dy } of A) { sumAdx += dx; sumAdy += dy; }
+  let sumBdx = 0, sumBdy = 0;
+  for (const { dx, dy } of B) { sumBdx += dx; sumBdy += dy; }
+  const next = [...s];
+  next[index] = [{ ...B[0], dx: sumAdx + B[0].dx, dy: sumAdy + B[0].dy }, ...B.slice(1)];
+  next[j] = [{ ...A[0], dx: A[0].dx - sumAdx - sumBdx, dy: A[0].dy - sumAdy - sumBdy }, ...A.slice(1)];
+  if (j + 1 < next.length) {
+    next[j + 1] = [{ ...next[j + 1][0], dx: next[j + 1][0].dx + sumBdx, dy: next[j + 1][0].dy + sumBdy }, ...next[j + 1].slice(1)];
+  }
+  return next;
+}
+
+function applyEditFirst(s: Stroke[], index: number, field: 'dx' | 'dy' | 'dt', value: number): Stroke[] {
+  const next = [...s];
+  next[index] = [{ ...next[index][0], [field]: value }, ...next[index].slice(1)];
+  return next;
+}
+
+// --- History ---
+
+type HistoryOp =
+  | { type: 'draw';   index: number; stroke: Stroke }
+  | { type: 'delete'; index: number; stroke: Stroke }
+  | { type: 'swap';   index: number }
+  | { type: 'edit';   index: number; field: 'dx' | 'dy' | 'dt'; from: number; to: number }
+  | { type: 'align';  fromDx: number; fromDy: number; toDx: number; toDy: number }
+  | { type: 'bulk';   from: Stroke[]; to: Stroke[] };
+
+function applyHistoryOp(s: Stroke[], op: HistoryOp, dir: 'undo' | 'redo'): Stroke[] {
+  switch (op.type) {
+    case 'draw':   return dir === 'undo' ? applyDelete(s, op.index) : applyDraw(s, op.index, op.stroke);
+    case 'delete': return dir === 'undo' ? applyDraw(s, op.index, op.stroke) : applyDelete(s, op.index);
+    case 'swap':   return applySwap(s, op.index);
+    case 'edit':   return applyEditFirst(s, op.index, op.field, dir === 'undo' ? op.from : op.to);
+    case 'align':
+      if (s.length === 0) return s;
+      return [[{ ...s[0][0], dx: dir === 'undo' ? op.fromDx : op.toDx, dy: dir === 'undo' ? op.fromDy : op.toDy }, ...s[0].slice(1)], ...s.slice(1)];
+    case 'bulk':   return dir === 'undo' ? op.from : op.to;
+  }
+}
+
+// --- Component ---
+
 function pointerPt(canvas: HTMLCanvasElement, e: PointerEvent, startTime: number) {
   const scale = canvas.width / canvas.offsetWidth;
   return {
@@ -58,6 +130,9 @@ export function App() {
   const replayDurRef     = useRef(0);
   const replayElapsedRef = useRef(0);
 
+  // Mirror of strokes state kept in sync synchronously so undo/redo don't read stale state
+  const strokesRef = useRef<Stroke[]>([]);
+
   // --- State ---
   const [strokes, setStrokes]               = useState<Stroke[]>([]);
   const [selectedStroke, setSelectedStroke] = useState<number | null>(null);
@@ -72,6 +147,12 @@ export function App() {
   }));
   const [exportOpen, setExportOpen]     = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
+
+  // --- History ---
+  const historyRef      = useRef<HistoryOp[]>([]);
+  const historyIndexRef = useRef(-1);
 
   // Persist config
   useEffect(() => {
@@ -125,6 +206,69 @@ export function App() {
     replayDurRef.current = dur;
     setReplayDuration(dur);
   }
+
+  function commit(next: Stroke[], ip: number, sel: number | null = null, tr = transforms) {
+    strokesRef.current = next;
+    setStrokes(next);
+    setInsertionPoint(ip);
+    setSelectedStroke(sel);
+    updateReplay(next, tr);
+    redraw(next, sel, ip, tr);
+  }
+
+  function pushHistory(op: HistoryOp) {
+    historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
+    historyRef.current.push(op);
+    historyIndexRef.current++;
+    setCanUndo(true);
+    setCanRedo(false);
+  }
+
+  // Refs so keyboard handler always calls the latest version without stale closures
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
+
+  undoRef.current = function undo() {
+    if (historyIndexRef.current < 0) return;
+    const op = historyRef.current[historyIndexRef.current];
+    historyIndexRef.current--;
+    const next = applyHistoryOp(strokesRef.current, op, 'undo');
+    strokesRef.current = next;
+    const ip = Math.min(insertionPoint, next.length);
+    setStrokes(next);
+    setInsertionPoint(ip);
+    setSelectedStroke(null);
+    updateReplay(next);
+    redraw(next, null, ip);
+    setCanUndo(historyIndexRef.current >= 0);
+    setCanRedo(true);
+  };
+
+  redoRef.current = function redo() {
+    if (historyIndexRef.current >= historyRef.current.length - 1) return;
+    historyIndexRef.current++;
+    const op = historyRef.current[historyIndexRef.current];
+    const next = applyHistoryOp(strokesRef.current, op, 'redo');
+    strokesRef.current = next;
+    const ip = Math.min(insertionPoint, next.length);
+    setStrokes(next);
+    setInsertionPoint(ip);
+    setSelectedStroke(null);
+    updateReplay(next);
+    redraw(next, null, ip);
+    setCanUndo(true);
+    setCanRedo(historyIndexRef.current < historyRef.current.length - 1);
+  };
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey && !e.shiftKey && e.key === 'z') { e.preventDefault(); undoRef.current(); }
+      else if (e.ctrlKey && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); redoRef.current(); }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // --- Replay ---
 
@@ -226,19 +370,9 @@ export function App() {
     const k = insertionPoint;
     currentStrokeRef.current = null;
     lastAbsPtRef.current = null;
-
-    const next = [...strokes];
-    next.splice(k, 0, stroke);
-    if (k + 1 < next.length) {
-      let sumDx = 0, sumDy = 0;
-      for (const { dx, dy } of stroke) { sumDx += dx; sumDy += dy; }
-      next[k + 1] = [{ ...next[k + 1][0], dx: next[k + 1][0].dx - sumDx, dy: next[k + 1][0].dy - sumDy }, ...next[k + 1].slice(1)];
-    }
-    const newIp = k + 1;
-    setStrokes(next);
-    setInsertionPoint(newIp);
-    updateReplay(next);
-    redraw(next, selectedStroke, newIp);
+    const next = applyDraw(strokes, k, stroke);
+    pushHistory({ type: 'draw', index: k, stroke });
+    commit(next, k + 1, selectedStroke);
   }
 
   function handlePointerUp() { commitStroke(); }
@@ -247,47 +381,25 @@ export function App() {
   // --- Stroke operations ---
 
   function deleteStroke(i: number) {
-    const next = [...strokes];
-    if (i + 1 < next.length) {
-      let sumDx = 0, sumDy = 0, sumDt = 0;
-      for (const { dx, dy, dt } of next[i]) { sumDx += dx; sumDy += dy; sumDt += dt; }
-      next[i + 1] = [{ ...next[i + 1][0], dx: next[i + 1][0].dx + sumDx, dy: next[i + 1][0].dy + sumDy, dt: next[i + 1][0].dt + sumDt }, ...next[i + 1].slice(1)];
-    }
-    next.splice(i, 1);
+    const stroke = strokes[i];
+    const next = applyDelete(strokes, i);
     const newIp = insertionPoint > i ? insertionPoint - 1 : insertionPoint;
-    setStrokes(next);
-    setInsertionPoint(newIp);
-    setSelectedStroke(null);
-    updateReplay(next);
-    redraw(next, null, newIp);
+    pushHistory({ type: 'delete', index: i, stroke });
+    commit(next, newIp);
   }
 
   function swapStrokes(i: number) {
-    const j = i + 1;
-    if (j >= strokes.length) return;
-    const next = strokes.map(s => [...s]);
-    const A = next[i], B = next[j];
-    let sumAdx = 0, sumAdy = 0;
-    for (const { dx, dy } of A) { sumAdx += dx; sumAdy += dy; }
-    let sumBdx = 0, sumBdy = 0;
-    for (const { dx, dy } of B) { sumBdx += dx; sumBdy += dy; }
-    next[i] = B; next[j] = A;
-    next[i][0] = { ...next[i][0], dx: sumAdx + B[0].dx, dy: sumAdy + B[0].dy };
-    next[j][0] = { ...next[j][0], dx: A[0].dx - sumAdx - sumBdx, dy: A[0].dy - sumAdy - sumBdy };
-    if (j + 1 < next.length) {
-      next[j + 1][0] = { ...next[j + 1][0], dx: next[j + 1][0].dx + sumBdx, dy: next[j + 1][0].dy + sumBdy };
-    }
-    setStrokes(next);
-    updateReplay(next);
-    redraw(next, selectedStroke, insertionPoint);
+    if (i + 1 >= strokes.length) return;
+    const next = applySwap(strokes, i);
+    pushHistory({ type: 'swap', index: i });
+    commit(next, insertionPoint, selectedStroke);
   }
 
   function editFirstPoint(i: number, field: 'dx' | 'dy' | 'dt', value: number) {
-    const next = strokes.map(s => [...s]);
-    next[i][0] = { ...next[i][0], [field]: value };
-    setStrokes(next);
-    updateReplay(next);
-    redraw(next, selectedStroke, insertionPoint);
+    const from = strokes[i][0][field];
+    const next = applyEditFirst(strokes, i, field, value);
+    pushHistory({ type: 'edit', index: i, field, from, to: value });
+    commit(next, insertionPoint, selectedStroke);
   }
 
   // --- Transforms ---
@@ -300,11 +412,10 @@ export function App() {
 
   function handleAlignApply() {
     const next = alignApply(strokes, transforms.padX, transforms.padY);
+    pushHistory({ type: 'align', fromDx: strokes[0][0].dx, fromDy: strokes[0][0].dy, toDx: next[0][0].dx, toDy: next[0][0].dy });
     const nextTr = { ...transforms, align: false };
-    setStrokes(next);
     setTransforms(nextTr);
-    updateReplay(next, nextTr);
-    redraw(next, selectedStroke, insertionPoint, nextTr);
+    commit(next, insertionPoint, selectedStroke, nextTr);
   }
 
   // --- Clear ---
@@ -312,13 +423,8 @@ export function App() {
   function handleClear() {
     if (!confirm('Clear all strokes?')) return;
     stopReplay();
-    setStrokes([]);
-    setSelectedStroke(null);
-    setInsertionPoint(0);
-    replayAbsRef.current = [];
-    replayDurRef.current = 0;
-    setReplayDuration(0);
-    clearCanvas(ctxRef.current!, config.guidelines);
+    pushHistory({ type: 'bulk', from: strokes, to: [] });
+    commit([], 0);
   }
 
   // --- Import / Export ---
@@ -332,12 +438,9 @@ export function App() {
     // Reset startTime so new strokes drawn after import have correct relative timing
     const lastT = toAbsolute(imported).flat().at(-1)?.t ?? 0;
     startTimeRef.current = performance.now() - lastT;
-    setStrokes(imported);
-    setSelectedStroke(null);
-    setInsertionPoint(imported.length);
+    pushHistory({ type: 'bulk', from: strokes, to: imported });
     setTransforms(nextTr);
-    updateReplay(imported, nextTr);
-    redraw(imported, null, imported.length, nextTr);
+    commit(imported, imported.length, null, nextTr);
   }
 
   async function handleExport(filename: string, gzip: boolean, ballpoint: boolean) {
@@ -365,6 +468,20 @@ export function App() {
     }}>
       <div id="main-area">
         <div id="canvas-area">
+          <div id="floating-toolbar">
+            <button id="btn-undo" disabled={!canUndo} onClick={() => undoRef.current()} title="Undo (Ctrl+Z)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 14 4 9l5-5"/>
+                <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>
+              </svg>
+            </button>
+            <button id="btn-redo" disabled={!canRedo} onClick={() => redoRef.current()} title="Redo (Ctrl+Y)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m15 14 5-5-5-5"/>
+                <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>
+              </svg>
+            </button>
+          </div>
           <canvas
             ref={canvasRef}
             id="canvas"

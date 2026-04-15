@@ -24,6 +24,16 @@ body {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
+  position: relative;
+}
+
+#floating-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 10;
 }
 
 #canvas {
@@ -79,6 +89,7 @@ button {
 button:hover { opacity: 0.85; }
 button:disabled { opacity: 0.4; cursor: default; }
 
+#btn-undo, #btn-redo { background: #333; color: #ccc; box-shadow: 0 1px 4px rgba(0,0,0,0.4); padding: 6px 8px; display: flex; align-items: center; }
 #btn-play    { background: #4f8ef7; color: #fff; }
 #btn-clear   { background: #e55; color: #fff; }
 #btn-export  { background: #555; color: #fff; }
