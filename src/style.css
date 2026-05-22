@@ -20,11 +20,18 @@ body {
   min-width: 0;
 }
 
+#canvas-wrapper {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 #canvas-area {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  position: relative;
 }
 
 #floating-toolbar {
@@ -34,6 +41,11 @@ body {
   display: flex;
   gap: 6px;
   z-index: 10;
+  pointer-events: none;
+}
+
+#floating-toolbar button {
+  pointer-events: auto;
 }
 
 #canvas {

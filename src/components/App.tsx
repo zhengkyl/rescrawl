@@ -248,9 +248,12 @@ export function App() {
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
     historyIndexRef.current++;
     const op = historyRef.current[historyIndexRef.current];
+    const prevLength = strokesRef.current.length;
     const next = applyHistoryOp(strokesRef.current, op, 'redo');
     strokesRef.current = next;
-    const ip = Math.min(insertionPoint, next.length);
+    const ip = (op.type === 'draw' && insertionPoint === prevLength)
+      ? next.length
+      : Math.min(insertionPoint, next.length);
     setStrokes(next);
     setInsertionPoint(ip);
     setSelectedStroke(null);
@@ -467,7 +470,7 @@ export function App() {
       editFirstPoint,
     }}>
       <div id="main-area">
-        <div id="canvas-area">
+        <div id="canvas-wrapper">
           <div id="floating-toolbar">
             <button id="btn-undo" disabled={!canUndo} onClick={() => undoRef.current()} title="Undo (Ctrl+Z)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -482,16 +485,18 @@ export function App() {
               </svg>
             </button>
           </div>
-          <canvas
-            ref={canvasRef}
-            id="canvas"
-            class={transforms.align ? 'no-draw' : ''}
-            onPointerDown={handlePointerDown as any}
-            onPointerMove={handlePointerMove as any}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerCancel}
-            onContextMenu={(e) => e.preventDefault()}
-          />
+          <div id="canvas-area">
+            <canvas
+              ref={canvasRef}
+              id="canvas"
+              class={transforms.align ? 'no-draw' : ''}
+              onPointerDown={handlePointerDown as any}
+              onPointerMove={handlePointerMove as any}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
+              onContextMenu={(e) => e.preventDefault()}
+            />
+          </div>
         </div>
         <BottomBar
           isPlaying={isPlaying}
