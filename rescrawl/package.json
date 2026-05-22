@@ -1,0 +1,12 @@
+{
+	"name": "rescrawl",
+	"version": "0.0.1",
+	"type": "module",
+	"main": "./src/index.ts",
+	"scripts": {
+		"dev": "tsc --watch"
+	},
+	"devDependencies": {
+		"typescript": "^6.0.2"
+	}
+}

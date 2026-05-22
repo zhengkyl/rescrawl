@@ -6,11 +6,22 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  rescrawl:
+    devDependencies:
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.2
+
+  website:
     dependencies:
       preact:
         specifier: ^10.26.9
         version: 10.29.0
+      rescrawl:
+        specifier: workspace:*
+        version: link:../rescrawl
     devDependencies:
       '@preact/preset-vite':
         specifier: ^2.10.2
