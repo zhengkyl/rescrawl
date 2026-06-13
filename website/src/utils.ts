@@ -8,7 +8,7 @@ export const DEFAULT_CONFIG = {
 
 export type Config = typeof DEFAULT_CONFIG;
 
-// --- Transforms ---
+// --- Bounds & framing ---
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
@@ -36,23 +36,26 @@ export function reframe(strokes: Stroke[], pad: number): Stroke[] {
   );
 }
 
-// --- Smooth ---
-
-export function smoothAverage(pts: { x: number; y: number }[], passes = 3) {
-  if (pts.length <= 2) return pts;
-  let cur = pts;
-  for (let p = 0; p < passes; p++) {
-    const next = [cur[0]];
-    for (let i = 1; i < cur.length - 1; i++) {
-      next.push({
-        x: (cur[i - 1].x + 2 * cur[i].x + cur[i + 1].x) / 4,
-        y: (cur[i - 1].y + 2 * cur[i].y + cur[i + 1].y) / 4,
-      });
-    }
-    next.push(cur[cur.length - 1]);
-    cur = next;
-  }
-  return cur;
+// The prefix of a stroke that has been drawn by time `t`: every sample with
+// t <= `t`, plus an interpolated head sitting exactly where the raw pen was at
+// `t`. `Infinity` returns the whole stroke; a time before the stroke starts
+// returns nothing. This is the single bridge between the timeline and geometry.
+export function drawnPoints(stroke: Stroke, t: number): Stroke {
+  const n = stroke.length;
+  if (n === 0 || t < stroke[0].t) return [];
+  if (t >= stroke[n - 1].t) return stroke;
+  let i = 0;
+  while (i < n - 1 && stroke[i + 1].t <= t) i++;
+  const a = stroke[i], b = stroke[i + 1];
+  const f = (t - a.t) / (b.t - a.t);
+  if (f <= 0) return stroke.slice(0, i + 1);
+  const head: Point = {
+    x: a.x + (b.x - a.x) * f,
+    y: a.y + (b.y - a.y) * f,
+    t,
+    p: a.p + (b.p - a.p) * f,
+  };
+  return [...stroke.slice(0, i + 1), head];
 }
 
 // --- Serialization ---
