@@ -1,7 +1,5 @@
-export type Point = { dx: number; dy: number; dt: number; pressure: number; tiltX: number; tiltY: number };
+export type Point = { x: number; y: number; t: number; p: number };
 export type Stroke = Point[];
-export type AbsPoint = { x: number; y: number; t: number };
-export type AbsStroke = AbsPoint[];
 
 export const DEFAULT_CONFIG = {
   sidebarRight: false,
@@ -10,66 +8,32 @@ export const DEFAULT_CONFIG = {
 
 export type Config = typeof DEFAULT_CONFIG;
 
-// --- Geometry ---
-
-export function toAbsolute(deltaStrokes: Stroke[]): AbsStroke[] {
-  const result: AbsStroke[] = [];
-  let prev: AbsPoint = { x: 0, y: 0, t: 0 };
-  for (const stroke of deltaStrokes) {
-    const abs: AbsStroke = [];
-    for (const { dx, dy, dt } of stroke) {
-      prev = { x: prev.x + dx, y: prev.y + dy, t: prev.t + dt };
-      abs.push({ ...prev });
-    }
-    result.push(abs);
-  }
-  return result;
-}
-
-export function getInsertionAbs(strokes: Stroke[], k: number): AbsPoint {
-  let pos: AbsPoint = { x: 0, y: 0, t: 0 };
-  for (let i = 0; i < k; i++)
-    for (const { dx, dy, dt } of strokes[i]) { pos.x += dx; pos.y += dy; pos.t += dt; }
-  return pos;
-}
-
 // --- Transforms ---
 
-export function capDtApply(strokes: Stroke[], max: number): Stroke[] {
-  return strokes.map(stroke =>
-    stroke.map(pt => ({ ...pt, dt: Math.min(pt.dt, max) }))
-  );
-}
+export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
-export function alignApply(strokes: Stroke[], padX: number, padY: number): Stroke[] {
-  if (strokes.length === 0) return strokes;
-  const abs = toAbsolute(strokes);
-  let minX = Infinity, minY = Infinity;
-  for (const stroke of abs)
+export function strokesBounds(strokes: Stroke[]): Bounds | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const stroke of strokes)
     for (const pt of stroke) {
       if (pt.x < minX) minX = pt.x;
       if (pt.y < minY) minY = pt.y;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.y > maxY) maxY = pt.y;
     }
-  const first = strokes[0];
-  return [
-    [{ ...first[0], dx: first[0].dx + padX - minX, dy: first[0].dy + padY - minY }, ...first.slice(1)],
-    ...strokes.slice(1),
-  ];
+  if (minX === Infinity) return null;
+  return { minX, minY, maxX, maxY };
 }
 
-export type TransformConfig = {
-  capDtEnabled: boolean;
-  capDtMax: number;
-  alignEnabled: boolean;
-  padX: number;
-  padY: number;
-};
-
-export function getEffectiveStrokes(strokes: Stroke[], cfg: TransformConfig): Stroke[] {
-  let result = strokes;
-  if (cfg.capDtEnabled) result = capDtApply(result, cfg.capDtMax);
-  if (cfg.alignEnabled) result = alignApply(result, cfg.padX, cfg.padY);
-  return result;
+// Translate every point so the content's top-left bound sits at (pad, pad) —
+// used to reframe a drawing to its used bounds + padding on export.
+export function reframe(strokes: Stroke[], pad: number): Stroke[] {
+  const b = strokesBounds(strokes);
+  if (!b) return strokes;
+  const dx = pad - b.minX, dy = pad - b.minY;
+  return strokes.map(stroke =>
+    stroke.map(pt => ({ ...pt, x: pt.x + dx, y: pt.y + dy }))
+  );
 }
 
 // --- Smooth ---
@@ -92,30 +56,47 @@ export function smoothAverage(pts: { x: number; y: number }[], passes = 3) {
 }
 
 // --- Serialization ---
+// Per stroke: first point absolute "x,y,t,p", rest relative "dx,dy,dt,dp".
 
 export function serializeBallpoint(strokes: Stroke[]): string {
   return strokes.map(stroke =>
-    stroke.map(({ dx, dy, dt }) => `${dx},${dy},${dt}`).join(';')
+    stroke.map((pt, i) => {
+      if (i === 0) return `${pt.x},${pt.y},${pt.t}`;
+      const prev = stroke[i - 1];
+      return `${pt.x - prev.x},${pt.y - prev.y},${pt.t - prev.t}`;
+    }).join(';')
   ).join('\n');
 }
 
 export function serialize(strokes: Stroke[]): string {
   return strokes.map(stroke =>
-    stroke.map(({ dx, dy, dt, pressure, tiltX, tiltY }) => `${dx},${dy},${dt},${pressure},${tiltX},${tiltY}`).join(';')
+    stroke.map((pt, i) => {
+      if (i === 0) return `${pt.x},${pt.y},${pt.t},${pt.p}`;
+      const prev = stroke[i - 1];
+      return `${pt.x - prev.x},${pt.y - prev.y},${pt.t - prev.t},${pt.p - prev.p}`;
+    }).join(';')
   ).join('\n');
 }
 
 export function deserialize(text: string): Stroke[] {
-  return text.split('\n').filter(line => line.trim() !== '').map(line =>
-    line.split(';').map(token => {
+  return text.split('\n').filter(line => line.trim() !== '').map(line => {
+    const stroke: Stroke = [];
+    let x = 0, y = 0, t = 0, p = 0;
+    line.split(';').forEach((token, i) => {
       const parts = token.split(',').map(Number);
-      const [dx, dy, dt] = parts;
-      const pressure = parts[3] ?? 0;
-      const tiltX = parts[4] ?? 0;
-      const tiltY = parts[5] ?? 0;
-      return { dx, dy, dt, pressure, tiltX, tiltY };
-    })
-  );
+      if (i === 0) {
+        [x, y, t] = parts;
+        p = parts[3] ?? 0;
+      } else {
+        x += parts[0];
+        y += parts[1];
+        t += parts[2];
+        p += parts[3] ?? 0;
+      }
+      stroke.push({ x, y, t, p });
+    });
+    return stroke;
+  });
 }
 
 export async function compressText(text: string): Promise<string> {

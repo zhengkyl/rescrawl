@@ -4,9 +4,11 @@ type Props = {
   open: boolean;
   onClose: () => void;
   onExport: (filename: string, gzip: boolean, ballpoint: boolean) => void;
+  padding: number;
+  onPaddingChange: (v: number) => void;
 };
 
-export function ExportDialog({ open, onClose, onExport }: Props) {
+export function ExportDialog({ open, onClose, onExport, padding, onPaddingChange }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [filename, setFilename] = useState('');
   const [gzip, setGzip] = useState(false);
@@ -44,6 +46,16 @@ export function ExportDialog({ open, onClose, onExport }: Props) {
           />
         </div>
         <div class="dialog-field">
+          <label for="export-padding">Padding</label>
+          <input
+            type="number"
+            id="export-padding"
+            min={0}
+            value={padding}
+            onInput={(e) => onPaddingChange(+(e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="dialog-field">
           <label>
             <input type="checkbox" id="export-gzip" checked={gzip} onChange={(e) => setGzip((e.target as HTMLInputElement).checked)} />
             {' '}Gzip compression
@@ -52,7 +64,7 @@ export function ExportDialog({ open, onClose, onExport }: Props) {
         <div class="dialog-field">
           <label>
             <input type="checkbox" id="export-ballpoint" checked={ballpoint} onChange={(e) => setBallpoint((e.target as HTMLInputElement).checked)} />
-            {' '}Ballpoint mode (omit pressure/tilt)
+            {' '}Ballpoint mode (omit pressure)
           </label>
         </div>
         <div class="dialog-actions">

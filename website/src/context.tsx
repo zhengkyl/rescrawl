@@ -9,7 +9,7 @@ export type AppContextValue = {
   setInsertionPoint: (i: number) => void;
   deleteStroke: (i: number) => void;
   swapStrokes: (i: number) => void;
-  editFirstPoint: (i: number, field: 'dx' | 'dy' | 'dt', value: number) => void;
+  editFirstPoint: (i: number, field: 'x' | 'y' | 't', value: number) => void;
 };
 
 export const AppContext = createContext<AppContextValue>({

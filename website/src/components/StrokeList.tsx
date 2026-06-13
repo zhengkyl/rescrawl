@@ -19,7 +19,7 @@ export function StrokeList() {
   );
 
   strokes.forEach((stroke, i) => {
-    const { dx, dy, dt } = stroke[0];
+    const { x, y, t } = stroke[0];
     items.push(
       <div
         key={`stroke-${i}`}
@@ -38,12 +38,12 @@ export function StrokeList() {
           </div>
         </div>
         <div class="stroke-fields">
-          {(['dx', 'dy', 'dt'] as const).map(field => (
+          {(['x', 'y', 't'] as const).map(field => (
             <label key={field}>
               {field}
               <input
                 type="number"
-                value={field === 'dx' ? dx : field === 'dy' ? dy : dt}
+                value={field === 'x' ? x : field === 'y' ? y : t}
                 onClick={(e) => e.stopPropagation()}
                 onChange={(e) => editFirstPoint(i, field, +(e.target as HTMLInputElement).value)}
               />
