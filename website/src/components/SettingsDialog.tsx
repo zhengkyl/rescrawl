@@ -1,15 +1,12 @@
 import { useRef, useEffect } from 'preact/hooks';
+import { useApp } from '../context';
+import { DEFAULT_CONFIG } from '../utils';
 
-type Props = {
-  open: boolean;
-  onClose: () => void;
-  sidebarRight: boolean;
-  onSidebarRightChange: (v: boolean) => void;
-  onReset: () => void;
-};
-
-export function SettingsDialog({ open, onClose, sidebarRight, onSidebarRightChange, onReset }: Props) {
+export function SettingsDialog() {
+  const { config, setConfig, settingsOpen: open, setSettingsOpen } = useApp();
   const dialogRef = useRef<HTMLDialogElement>(null);
+
+  const onClose = () => setSettingsOpen(false);
 
   useEffect(() => {
     const dialog = dialogRef.current!;
@@ -24,14 +21,14 @@ export function SettingsDialog({ open, onClose, sidebarRight, onSidebarRightChan
           <input
             type="checkbox"
             id="chk-sidebar-right"
-            checked={sidebarRight}
-            onChange={(e) => onSidebarRightChange((e.target as HTMLInputElement).checked)}
+            checked={config.sidebarRight}
+            onChange={(e) => setConfig(c => ({ ...c, sidebarRight: (e.target as HTMLInputElement).checked }))}
           />
           {' '}Sidebar on right
         </label>
       </div>
       <div class="dialog-actions">
-        <button type="button" id="btn-settings-reset" onClick={onReset}>Reset to defaults</button>
+        <button type="button" id="btn-settings-reset" onClick={() => setConfig({ ...DEFAULT_CONFIG })}>Reset to defaults</button>
         <button type="button" id="settings-close" onClick={onClose}>Close</button>
       </div>
     </dialog>

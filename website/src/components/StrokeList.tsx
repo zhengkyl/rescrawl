@@ -1,8 +1,13 @@
-import { useContext } from 'preact/hooks';
-import { AppContext } from '../context';
+import { useApp } from '../context';
 
 export function StrokeList() {
-  const { strokes, selectedStroke, insertionPoint, setSelectedStroke, setInsertionPoint, deleteStroke, swapStrokes, editFirstPoint } = useContext(AppContext);
+  const { store } = useApp();
+  const {
+    strokes, selectedStroke, insertionPoint,
+    select: setSelectedStroke,
+    setInsertion: setInsertionPoint,
+    deleteStroke, swapStrokes, editFirstPoint,
+  } = store;
 
   if (strokes.length === 0) {
     return <div id="stroke-list"><div id="no-strokes">No strokes yet</div></div>;

@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { App } from './components/App';
+import { Workspace } from './components/Workspace';
 import './style.css';
 
-render(<App />, document.getElementById('app')!);
+render(<Workspace />, document.getElementById('app')!);

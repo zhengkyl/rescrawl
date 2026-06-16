@@ -1,4 +1,5 @@
-import { renderStroke } from 'rescrawl';
+import { renderStroke, strokeDebug, RENDER_DEFAULTS } from 'rescrawl';
+import type { RenderOptions } from 'rescrawl';
 import type { Stroke } from './utils';
 import { drawnPoints } from './utils';
 
@@ -31,6 +32,10 @@ export type ActiveStrategy = { def: StrategyDef; param: number };
 export type StrategyState = { enabled: boolean; param: number };
 export type StrategiesState = Record<string, StrategyState>;
 
+// Independently-toggleable layers of the Debug overlay.
+export type DebugLayers = { centerline: boolean; offsets: boolean; dots: boolean };
+export const DEBUG_DEFAULTS: DebugLayers = { centerline: true, offsets: true, dots: true };
+
 const LINE_WIDTH = 2;
 const EMPTY: RenderedLine = { curve: '', width: LINE_WIDTH };
 
@@ -57,12 +62,15 @@ function polylinePath(pts: { x: number; y: number }[]): string {
 // Add new rendering strategies here — each entry auto-appears in the Curve panel.
 export const STRATEGY_DEFS: StrategyDef[] = [
   {
-    id: 'polyline',
-    label: 'Polyline',
+    id: 'debug',
+    label: 'Debug',
     color: '#3b82f6',
     defaultParam: 0,
     paramLabel: '',
     paramMin: 0, paramMax: 0, paramStep: 0,
+    // Special-cased in App: enabling this draws the debug overlay (centerline +
+    // offset points + raw dots) rather than this polyline. The polyline render
+    // is kept only as the fallback used for the selected-stroke highlight.
     render: timed((pts) => ({ curve: polylinePath(pts), width: LINE_WIDTH })),
   },
   {
@@ -94,16 +102,38 @@ export const STRATEGY_DEFS: StrategyDef[] = [
 
 // The main render type — variable-width calligraphic ink from the rescrawl
 // library. Always drawn (as the base layer); the strategies above are optional
-// reference curves layered on top.
-export const INK: StrategyDef = {
-  id: 'ink',
-  label: 'Ink',
-  color: '#1a1a1a',
-  defaultParam: 8,
-  paramLabel: 'max width',
-  paramMin: 2, paramMax: 30, paramStep: 1,
-  render: timed((pts, maxWidth) => renderStroke(pts, { maxWidth })),
-};
+// reference curves layered on top. Unlike a strategy, ink takes the full set of
+// rescrawl options (exposed as knobs in the panel).
+export const INK_COLOR = '#1a1a1a';
+
+export type InkOptions = Required<RenderOptions>;
+export const INK_DEFAULTS: InkOptions = { ...RENDER_DEFAULTS };
+
+// Draw the ink as of time `t` (Infinity = fully drawn).
+export function renderInk(stroke: Stroke, options: InkOptions, t: number): RenderedLine {
+  const pts = drawnPoints(stroke, t);
+  return pts.length ? renderStroke(pts, options) : { curve: '', width: options.maxWidth };
+}
+
+// Debug geometry (centerline + outline points + raw recorded dots) as of `t`.
+export function inkDebug(stroke: Stroke, options: InkOptions, t: number): { curve: string; points: { x: number; y: number }[]; dots: { x: number; y: number }[] } {
+  const pts = drawnPoints(stroke, t);
+  return pts.length ? strokeDebug(pts, options) : { curve: '', points: [], dots: [] };
+}
+
+// Slider metadata for every adjustable (numeric) ink value.
+type NumericInkKey = { [K in keyof InkOptions]: InkOptions[K] extends number ? K : never }[keyof InkOptions];
+export type InkControl = { key: NumericInkKey; label: string; min: number; max: number; step: number };
+export const INK_CONTROLS: InkControl[] = [
+  { key: 'minWidth', label: 'min width', min: 0, max: 20, step: 0.5 },
+  { key: 'maxWidth', label: 'max width', min: 1, max: 40, step: 0.5 },
+  { key: 'pressureMax', label: 'pressure max', min: 1024, max: 16384, step: 256 },
+  { key: 'flowFull', label: 'flow full (ms)', min: 2, max: 200, step: 1 },
+  { key: 'poolFull', label: 'pool full (ms)', min: 50, max: 1500, step: 10 },
+  { key: 'smoothWidth', label: 'smooth width', min: 0, max: 12, step: 1 },
+  { key: 'smooth', label: 'smooth', min: 0, max: 1, step: 0.05 },
+  { key: 'simplify', label: 'simplify (px)', min: 0, max: 4, step: 0.05 },
+];
 
 export function getDefaultStrategies(): StrategiesState {
   // Overlays default off — ink alone is the default view.

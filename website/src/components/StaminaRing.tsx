@@ -1,4 +1,4 @@
-import type { RefObject } from 'preact';
+import { useApp } from '../context';
 
 export const STAMINA_R = 11;            // ring radius (px)
 export const STAMINA_C = 14;            // svg centre (px)
@@ -17,19 +17,15 @@ export function staminaArc(frac: number): string {
   return `M ${cx} ${cy - r} A ${r} ${r} 0 ${largeArc} 1 ${x1} ${y1}`;
 }
 
-type Props = {
-  containerRef: RefObject<HTMLDivElement>;
-  arcRef: RefObject<SVGPathElement>;
-};
-
 // Floating countdown ring. Position/opacity/arc are driven imperatively by
 // useLiveRecording via the refs — this is just the markup.
-export function StaminaRing({ containerRef, arcRef }: Props) {
+export function StaminaRing() {
+  const { live } = useApp();
   return (
-    <div id="stamina" ref={containerRef}>
+    <div id="stamina" ref={live.ringRef}>
       <svg width={STAMINA_SIZE} height={STAMINA_SIZE} viewBox={`0 0 ${STAMINA_SIZE} ${STAMINA_SIZE}`}>
         <circle cx={STAMINA_C} cy={STAMINA_C} r={STAMINA_R} fill="none" stroke="rgba(0,0,0,0.35)" stroke-width="3" />
-        <path ref={arcRef} fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
+        <path ref={live.arcRef} fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
       </svg>
     </div>
   );

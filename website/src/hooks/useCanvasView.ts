@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'preact/hooks';
-import type { RefObject } from 'preact';
 import type { Stroke } from '../utils';
 import { strokesBounds } from '../utils';
 
@@ -13,8 +12,13 @@ const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 
 // Owns the pan/zoom camera: keeps the live transform on the viewport <g>,
 // converts screen→content coordinates, and fits content to the viewport.
-export function useCanvasView(svgRef: RefObject<SVGSVGElement>, strokes: Stroke[]) {
+// `panButton` selects which pointer button drags to pan (default middle, so the
+// main canvas keeps the left button free for drawing; a preview can pass 0).
+export function useCanvasView(strokes: Stroke[], panButton = 1) {
+
+  const svgRef = useRef<SVGSVGElement>(null);
   const viewportRef = useRef<SVGGElement>(null);
+
   const viewRef = useRef<View>({ panX: 0, panY: 0, zoom: 1 });
 
   function applyView(v: View) {
@@ -69,19 +73,50 @@ export function useCanvasView(svgRef: RefObject<SVGSVGElement>, strokes: Stroke[
     applyView({ panX: rect.width / 2 - cx * zoom, panY: rect.height / 2 - cy * zoom, zoom });
   }
 
-  // Mount: fit, and attach a non-passive wheel listener for zoom.
+  // Mount: fit, and attach the camera input gestures — wheel to zoom and
+  // middle-mouse drag to pan. Owning the pan gesture here (rather than in the
+  // drawing pointer handlers) keeps the camera fully self-contained.
   useEffect(() => {
     fitToView();
     const svg = svgRef.current;
     if (!svg) return;
+
+    let panning = false;
+    let lastX = 0;
+    let lastY = 0;
+
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
       zoomAt(e.clientX, e.clientY, Math.pow(1.001, -e.deltaY));
     }
+    function handlePointerDown(e: PointerEvent) {
+      if (e.button !== panButton) return;
+      svg!.setPointerCapture(e.pointerId);
+      panning = true;
+      lastX = e.clientX;
+      lastY = e.clientY;
+    }
+    function handlePointerMove(e: PointerEvent) {
+      if (!panning) return;
+      pan(e.clientX - lastX, e.clientY - lastY);
+      lastX = e.clientX;
+      lastY = e.clientY;
+    }
+    function endPan() { panning = false; }
+
     svg.addEventListener('wheel', handleWheel, { passive: false });
-    return () => svg.removeEventListener('wheel', handleWheel);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    svg.addEventListener('pointerdown', handlePointerDown);
+    svg.addEventListener('pointermove', handlePointerMove);
+    svg.addEventListener('pointerup', endPan);
+    svg.addEventListener('pointercancel', endPan);
+    return () => {
+      svg.removeEventListener('wheel', handleWheel);
+      svg.removeEventListener('pointerdown', handlePointerDown);
+      svg.removeEventListener('pointermove', handlePointerMove);
+      svg.removeEventListener('pointerup', endPan);
+      svg.removeEventListener('pointercancel', endPan);
+    };
   }, []);
 
-  return { viewportRef, fitToView, svgToContent, pan };
+  return { svgRef, viewportRef, fitToView, svgToContent };
 }
