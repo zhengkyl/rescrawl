@@ -15,7 +15,6 @@ import { CurvePanel } from './CurvePanel';
 import { ExportDialog } from './ExportDialog';
 import { InkPanel } from './InkPanel';
 import { SettingsDialog } from './SettingsDialog';
-import { StaminaRing } from './StaminaRing';
 import { StrokeList } from './StrokeList';
 
 // Owns all shared app state and the surrounding chrome (toolbar, panels, bottom
@@ -46,6 +45,13 @@ export function Workspace() {
   useEffect(() => { localStorage.setItem('rescrawl-config', JSON.stringify(config)); }, [config]);
   useEffect(() => { document.body.classList.toggle('panel-left', !config.sidebarRight); }, [config.sidebarRight]);
 
+  function handleClear() {
+    if (!confirm('Clear all strokes?')) return;
+    replay.stop();
+    live.reset();
+    store.clear();
+  }
+
   // Undo/redo shortcuts (store actions are stable).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -68,12 +74,6 @@ export function Workspace() {
     }}>
       <div id="main-area">
         <div id="canvas-wrapper">
-          {live.isLive && (
-            <div id="rec-indicator" title="Recording — timings are live">
-              <span class="rec-dot" />REC
-            </div>
-          )}
-          <StaminaRing />
           <div id="floating-toolbar">
             <button id="btn-undo" disabled={!store.canUndo} onClick={store.undo} title="Undo (Ctrl+Z)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -85,6 +85,13 @@ export function Workspace() {
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m15 14 5-5-5-5" />
                 <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
+              </svg>
+            </button>
+            <button id="btn-clear" disabled={replay.isPlaying || !store.strokes.length} onClick={handleClear} title="Clear all strokes">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 6h18" />
+                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
               </svg>
             </button>
             <button id="btn-reset-view" onClick={view.fitToView} title="Reset view">

@@ -1,33 +1,45 @@
-import { useRef, useEffect, useState } from 'preact/hooks';
+import { useRef, useEffect, useMemo, useState } from 'preact/hooks';
 import { useApp } from '../context';
 import { INK_COLOR, renderInk } from '../curves';
 import { useCanvasView } from '../hooks/useCanvasView';
-import { reframe, serialize, serializeBallpoint, strokesBounds } from '../utils';
+import { countPoints, reframe, serialize, serializeBallpoint, simplifyStrokes, strokesBounds } from '../utils';
 import { drawLine } from './strokeRender';
 
 const DEFAULT_PADDING = 40;
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
 
 export function ExportDialog() {
   const { store, inkOptions, exportOpen: open, setExportOpen } = useApp();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [filename, setFilename] = useState('');
   const [padding, setPadding] = useState(DEFAULT_PADDING);
-  const [gzip, setGzip] = useState(false);
+  const [simplify, setSimplify] = useState(0);
   const [ballpoint, setBallpoint] = useState(false);
 
   // Preview camera: left-drag pans (button 0) since there's no drawing here.
   const view = useCanvasView(store.strokes, 0);
-  const bounds = strokesBounds(store.strokes);
+
+  // Simplify drives both the preview and the exported file, so derive once.
+  const simplified = useMemo(() => simplifyStrokes(store.strokes, simplify), [store.strokes, simplify]);
+  const bounds = strokesBounds(simplified);
+  const text = useMemo(() => {
+    const effective = reframe(simplified, padding);
+    return ballpoint ? serializeBallpoint(effective) : serialize(effective);
+  }, [simplified, padding, ballpoint]);
+  const fileSize = useMemo(() => new TextEncoder().encode(text).length, [text]);
 
   const onClose = () => setExportOpen(false);
 
-  function handleExport(name: string, useGzip: boolean, useBallpoint: boolean) {
-    const effective = reframe(store.strokes, padding);
-    const text = useBallpoint ? serializeBallpoint(effective) : serialize(effective);
+  function handleExport(name: string) {
     const blob = new Blob([text], { type: 'text/plain' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = name + (useGzip ? '.scrawl.gz' : '.scrawl');
+    a.download = name + '.scrawl';
     a.click();
     URL.revokeObjectURL(a.href);
     onClose();
@@ -37,7 +49,7 @@ export function ExportDialog() {
     const dialog = dialogRef.current!;
     if (open) {
       setFilename('');
-      setGzip(false);
+      setSimplify(0);
       setBallpoint(false);
       dialog.showModal();
       view.fitToView(); // svg now laid out; frame the strokes
@@ -49,18 +61,18 @@ export function ExportDialog() {
 
   function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
-    handleExport(filename.trim() || 'drawing', gzip, ballpoint);
+    handleExport(filename.trim() || 'drawing');
   }
 
   return (
     <dialog ref={dialogRef} onClose={onClose}>
-      <form onSubmit={handleSubmit}>
+      <form class="export-form" onSubmit={handleSubmit}>
         <div class="dialog-field">
           <label>Preview <span class="preview-hint">scroll to zoom · drag to pan</span></label>
           <div class="preview-wrap">
             <svg ref={view.svgRef} class="export-preview">
               <g ref={view.viewportRef}>
-                {store.strokes.map((s, i) => drawLine(renderInk(s, inkOptions, Infinity), i, INK_COLOR))}
+                {simplified.map((s, i) => drawLine(renderInk(s, inkOptions, Infinity), i, INK_COLOR))}
                 {bounds && (
                   <rect
                     x={bounds.minX - padding}
@@ -102,10 +114,23 @@ export function ExportDialog() {
           />
         </div>
         <div class="dialog-field">
-          <label>
-            <input type="checkbox" id="export-gzip" checked={gzip} onChange={(e) => setGzip((e.target as HTMLInputElement).checked)} />
-            {' '}Gzip compression
+          <label for="export-simplify">
+            Simplify
+            <span class="field-value">{simplify.toFixed(2)} px</span>
           </label>
+          <input
+            type="range"
+            id="export-simplify"
+            min={0}
+            max={5}
+            step={0.05}
+            value={simplify}
+            onInput={(e) => setSimplify(+(e.target as HTMLInputElement).value)}
+          />
+        </div>
+        <div class="dialog-field export-size">
+          <span>{countPoints(simplified).toLocaleString()} points{simplify > 0 && ` (of ${countPoints(store.strokes).toLocaleString()})`}</span>
+          <span class="field-value">{formatBytes(fileSize)}</span>
         </div>
         <div class="dialog-field">
           <label>

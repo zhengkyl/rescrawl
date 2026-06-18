@@ -44,47 +44,6 @@ body {
   pointer-events: none;
 }
 
-#rec-indicator {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 9px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  pointer-events: none;
-}
-
-#rec-indicator .rec-dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: #ef4444;
-  animation: rec-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes rec-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
-}
-
-#stamina {
-  position: fixed;
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  z-index: 30;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
-}
-
 #floating-toolbar button {
   pointer-events: auto;
 }
@@ -146,18 +105,176 @@ button {
 button:hover { opacity: 0.85; }
 button:disabled { opacity: 0.4; cursor: default; }
 
-#btn-undo, #btn-redo, #btn-reset-view { background: #333; color: #ccc; box-shadow: 0 1px 4px rgba(0,0,0,0.4); padding: 6px 8px; display: flex; align-items: center; }
+#btn-undo, #btn-redo, #btn-reset-view, #btn-clear { background: #333; color: #ccc; box-shadow: 0 1px 4px rgba(0,0,0,0.4); padding: 6px 8px; display: flex; align-items: center; }
+#btn-clear   { color: #f87171; }
 #btn-play    { background: #4f8ef7; color: #fff; }
-#btn-clear   { background: #e55; color: #fff; }
 #btn-export  { background: #555; color: #fff; }
 #btn-import  { background: #555; color: #fff; }
 
-#scrubber {
+.timeline {
   flex: 1;
-  accent-color: #4f8ef7;
-  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
 }
-#scrubber:disabled { opacity: 0.4; cursor: default; }
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-readout {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: #aaa;
+  white-space: nowrap;
+}
+
+.timeline-track {
+  width: 100%;
+  min-width: 0;
+  height: 44px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: #444 transparent;
+}
+.timeline-track.is-empty { opacity: 0.5; }
+.timeline-track::-webkit-scrollbar { height: 8px; }
+.timeline-track::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+
+.timeline-content {
+  position: relative;
+  min-width: 100%;
+  height: 100%;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.timeline-ruler {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.timeline-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid #2e2e2e;
+}
+.timeline-tick-label {
+  position: absolute;
+  top: 3px;
+  left: 4px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: #777;
+  pointer-events: none;
+}
+
+/* Per-stroke segments: a line from start to end time with circular caps,
+   stacked into lanes when strokes overlap in time. */
+.timeline-strokes {
+  position: absolute;
+  top: 22px;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+.timeline-stroke {
+  position: absolute;
+  height: 3px;
+  margin-top: -1.5px;
+  background: #b9c0cc;
+  border-radius: 2px;
+}
+.timeline-stroke::before,
+.timeline-stroke::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: inherit;
+  transform: translate(-50%, -50%);
+}
+.timeline-stroke::before { left: 0; }
+.timeline-stroke::after { left: 100%; }
+.timeline-stroke.is-selected { background: #4f8ef7; }
+.timeline-stroke.is-live { background: #ef4444; }
+
+.timeline-played {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(79, 142, 247, 0.16);
+  pointer-events: none;
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: repeating-linear-gradient(to bottom, #4f8ef7 0 4px, transparent 4px 8px);
+  pointer-events: none;
+}
+.timeline-playhead-handle {
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  transform: translateX(-50%);
+  background: #4f8ef7;
+  border-radius: 0 0 3px 3px;
+}
+
+/* While recording, the playhead is the live head and carries the grace-period
+   countdown ring (replacing the old floating stamina ring). */
+.timeline.is-live .timeline-played { background: rgba(239, 68, 68, 0.14); }
+.timeline.is-live .timeline-playhead { background: repeating-linear-gradient(to bottom, #ef4444 0 4px, transparent 4px 8px); }
+.timeline.is-live .timeline-readout { color: #ef4444; }
+.timeline-grace {
+  position: absolute;
+  top: 1px;
+  left: 50%;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+}
+
+/* The "tentative end": where committed content stops — the replay/export
+   boundary. Solid (a definitive content edge), versus the dashed playhead, which
+   rides the current time and can sit past the content after live mode ends. */
+.timeline-tentative {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #4f8ef7;
+  pointer-events: none;
+}
+.timeline-tentative-handle {
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #4f8ef7;
+}
 
 #btn-cap-dt, #btn-align, #btn-align-apply, #btn-settings { background: #555; color: #fff; }
 #btn-settings { flex: 0 0 auto; padding: 6px 8px; display: flex; align-items: center; }
@@ -291,13 +408,17 @@ dialog::backdrop { background: rgba(0,0,0,0.5); }
   color: #eee; font-size: 13px; padding: 5px 8px; outline: none;
 }
 .dialog-field input[type="text"]:focus { border-color: #4f8ef7; }
+.export-form { width: min(88vw, 660px); }
 .preview-hint { color: #666; font-size: 11px; margin-left: auto; }
 .preview-wrap { position: relative; }
 .export-preview {
-  display: block; width: 100%; height: 180px;
+  display: block; width: 100%; height: min(60vh, 460px);
   background: #fff; border: 1px solid #444; border-radius: 4px;
   touch-action: none; cursor: grab;
 }
+.dialog-field input[type="range"] { width: 100%; accent-color: #4f8ef7; cursor: pointer; }
+.field-value { margin-left: auto; color: #ccc; font-variant-numeric: tabular-nums; }
+.export-size { flex-direction: row; align-items: center; color: #888; font-size: 12px; }
 .preview-reset {
   position: absolute; top: 6px; right: 6px;
   display: flex; align-items: center; justify-content: center;

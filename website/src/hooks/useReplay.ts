@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Stroke } from '../utils';
+import { strokeEnd } from '../utils';
 
 function totalDuration(strokes: Stroke[]): number {
-  return strokes.reduce((m, st) => st.reduce((mm, pt) => Math.max(mm, pt.t), m), 0);
+  let max = 0;
+  for (const st of strokes) max = Math.max(max, strokeEnd(st));
+  return max;
 }
 
 // Owns the replay playhead (a single elapsed-ms clock) and its rAF loop. The
@@ -70,6 +73,14 @@ export function useReplay(strokes: Stroke[]) {
     setIsReplaying(true);
   }
 
+  // Move the playhead without entering replay-clip mode — used by recording to
+  // seed the head and to leave it at the end of a just-drawn stroke.
+  function seek(ms: number) {
+    pause();
+    setElapsed(ms);
+    setIsReplaying(false);
+  }
+
   function toggle() {
     if (rafRef.current) pause();
     else play();
@@ -77,5 +88,5 @@ export function useReplay(strokes: Stroke[]) {
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
-  return { elapsed, duration, isPlaying, isReplaying, play, pause, stop, scrub, toggle };
+  return { elapsed, duration, isPlaying, isReplaying, play, pause, stop, scrub, seek, toggle };
 }

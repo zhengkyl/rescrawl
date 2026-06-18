@@ -1,28 +1,25 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { staminaArc } from '../components/StaminaRing';
 
-const LIVE_TIMEOUT = 2000;    // ms of idle after a stroke before live mode ends
-const STAMINA_WINDOW = 1000;  // only show the ring during the last Nms of the countdown
-const STAMINA_OFFSET_X = 52;  // ring distance right of the cursor (px)
-const STAMINA_OFFSET_Y = 52;  // ring distance above the cursor (px)
-const STAMINA_EASE = 0.12;    // position smoothing per frame (lower = floatier)
+const LIVE_TIMEOUT = 2000; // ms of idle after a stroke before live mode ends
 
 // Owns the recording clock. Stroke timings only advance while "live" (drawing
 // plus a short grace period after each stroke), which naturally caps the gap
-// between strokes. Also drives the floating countdown ring imperatively.
+// between strokes. The live head and the grace countdown are surfaced through
+// `now()` / `graceFraction()` so the timeline can visualise them.
 export function useLiveRecording() {
   const [isLive, setIsLive] = useState(false);
 
-  const baseRef = useRef(0);                    // live ms banked from ended sessions
+  const baseRef = useRef(0);                            // live ms banked from ended sessions
   const sessionStartRef = useRef<number | null>(null); // performance.now() of current session, or null
-  const countdownStartRef = useRef(0);          // performance.now() when the grace countdown began
-  const rafRef = useRef<number | null>(null);   // rAF id driving the ring
-  const cursorRef = useRef({ x: 0, y: 0 });     // latest pointer position (client coords)
-  const ringPosRef = useRef({ x: 0, y: 0 });    // eased ring position (client coords)
-  const ringRef = useRef<HTMLDivElement>(null);
-  const arcRef = useRef<SVGPathElement>(null);
+  const countdownStartRef = useRef<number | null>(null); // performance.now() when the grace countdown began, or null while drawing
+  const timerRef = useRef<number | null>(null);        // timeout that ends live mode when the grace runs out
+  const activeStartRef = useRef<number | null>(null);  // live-ms start of the stroke being drawn, or null when not drawing
 
-  const ringTarget = () => ({ x: cursorRef.current.x + STAMINA_OFFSET_X, y: cursorRef.current.y - STAMINA_OFFSET_Y });
+  // Live-ms timestamp of the in-progress stroke's start, or null between
+  // strokes. The timeline pairs this with `now()` to draw the growing segment.
+  function activeStart(): number | null {
+    return activeStartRef.current;
+  }
 
   // Current live-elapsed ms (banked sessions + the running one, if any).
   function now(): number {
@@ -30,20 +27,18 @@ export function useLiveRecording() {
     return Math.round(baseRef.current + running);
   }
 
-  function updateCursor(x: number, y: number) {
-    cursorRef.current = { x, y };
+  // Fraction of the post-stroke grace period remaining: 1 while a stroke is in
+  // progress, depleting to 0 over LIVE_TIMEOUT once the pen lifts, 0 when not
+  // live. The timeline reads this each frame to draw the depletion ring.
+  function graceFraction(): number {
+    if (sessionStartRef.current === null) return 0;       // not live
+    if (countdownStartRef.current === null) return 1;     // actively drawing
+    const remaining = LIVE_TIMEOUT - (performance.now() - countdownStartRef.current);
+    return Math.max(0, Math.min(1, remaining / LIVE_TIMEOUT));
   }
 
-  function cancelCountdown() {
-    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-    if (ringRef.current) ringRef.current.style.opacity = '0';
-  }
-
-  // A stroke started: (re)enter live mode and cancel any pending countdown.
-  function strokeStarted() {
-    cancelCountdown();
-    if (sessionStartRef.current === null) sessionStartRef.current = performance.now();
-    setIsLive(true);
+  function clearTimer() {
+    if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
   }
 
   function endLive() {
@@ -51,49 +46,39 @@ export function useLiveRecording() {
       baseRef.current += performance.now() - sessionStartRef.current;
       sessionStartRef.current = null;
     }
-    cancelCountdown();
+    countdownStartRef.current = null;
+    clearTimer();
     setIsLive(false);
   }
 
-  function frame(t: number) {
-    const remaining = LIVE_TIMEOUT - (t - countdownStartRef.current);
-    if (remaining <= 0) { rafRef.current = null; endLive(); return; }
-
-    const target = ringTarget();
-    const show = remaining <= STAMINA_WINDOW;
-    const pos = ringPosRef.current;
-    if (show) {
-      pos.x += (target.x - pos.x) * STAMINA_EASE;
-      pos.y += (target.y - pos.y) * STAMINA_EASE;
-    } else {
-      pos.x = target.x; pos.y = target.y; // park at the cursor while hidden
-    }
-    const el = ringRef.current;
-    if (el) {
-      el.style.left = `${pos.x}px`;
-      el.style.top = `${pos.y}px`;
-      el.style.opacity = show ? '1' : '0';
-    }
-    if (show) arcRef.current?.setAttribute('d', staminaArc(remaining / STAMINA_WINDOW));
-    rafRef.current = requestAnimationFrame(frame);
+  // A stroke started: (re)enter live mode and cancel any pending countdown.
+  function strokeStarted() {
+    clearTimer();
+    countdownStartRef.current = null;
+    if (sessionStartRef.current === null) sessionStartRef.current = performance.now();
+    activeStartRef.current = now();
+    setIsLive(true);
   }
 
-  // A stroke ended: start the grace countdown unless drawing resumes.
+  // A stroke ended: start the grace countdown; live mode ends if it runs out.
   function strokeEnded() {
+    activeStartRef.current = null;
     countdownStartRef.current = performance.now();
-    ringPosRef.current = ringTarget();
-    if (rafRef.current === null) rafRef.current = requestAnimationFrame(frame);
+    clearTimer();
+    timerRef.current = setTimeout(endLive, LIVE_TIMEOUT) as unknown as number;
   }
 
   // Reset the clock (e.g. on clear) or seed it (e.g. continuing an import).
   function reset(base = 0) {
-    cancelCountdown();
+    clearTimer();
     baseRef.current = base;
     sessionStartRef.current = null;
+    countdownStartRef.current = null;
+    activeStartRef.current = null;
     setIsLive(false);
   }
 
-  useEffect(() => () => cancelCountdown(), []);
+  useEffect(() => () => clearTimer(), []);
 
-  return { isLive, now, updateCursor, strokeStarted, strokeEnded, reset, ringRef, arcRef };
+  return { isLive, now, graceFraction, activeStart, strokeStarted, strokeEnded, reset };
 }

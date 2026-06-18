@@ -52,6 +52,7 @@ export const RENDER_DEFAULTS: Required<RenderOptions> = {
 };
 
 const COINCIDENT_EPS = 0.5; // px — points closer than this are the same position
+const DOT_TAP_MS = 250;     // a standalone tap held this briefly is just a dot, not a "hold to grow"
 
 // --- small helpers ---
 
@@ -134,29 +135,38 @@ function smoothSeries(arr: number[], passes: number): number[] {
 //
 // Greedy from the start: every run but the trailing one is frozen as the stroke
 // grows, matching the renderer's "only the final segment is live" guarantee.
-function simplifyCollinear(nodes: Node[], half: number[], eps: number): { nodes: Node[]; half: number[] } {
-  const n = nodes.length;
-  if (n <= 2 || eps <= 0) return { nodes, half };
-  const outN: Node[] = [nodes[0]], outH: number[] = [half[0]];
+// Core test: greedily walk the points, returning the indices to keep. A run from
+// `a` collapses to its endpoints while every interior point stays within `eps` of
+// the time-chord (see above). Shared by the renderer (on collapsed nodes) and the
+// public `simplifyStroke` (on raw points), so both reduce identically.
+function collinearKeep(pts: { x: number; y: number; t: number }[], eps: number): number[] {
+  const n = pts.length;
+  if (n <= 2 || eps <= 0) return pts.map((_, i) => i);
+  const keep = [0];
   let a = 0;
   while (a < n - 1) {
     let k = a + 1; // furthest endpoint whose run stays within tolerance
     while (k < n - 1) {
-      const end = k + 1, dt = nodes[end].t - nodes[a].t;
+      const end = k + 1, dt = pts[end].t - pts[a].t;
       let collinear = dt > 0;
       for (let j = a + 1; collinear && j <= k; j++) {
-        const s = (nodes[j].t - nodes[a].t) / dt;
-        collinear = Math.abs(nodes[j].x - lerp(nodes[a].x, nodes[end].x, s)) <= eps &&
-          Math.abs(nodes[j].y - lerp(nodes[a].y, nodes[end].y, s)) <= eps;
+        const s = (pts[j].t - pts[a].t) / dt;
+        collinear = Math.abs(pts[j].x - lerp(pts[a].x, pts[end].x, s)) <= eps &&
+          Math.abs(pts[j].y - lerp(pts[a].y, pts[end].y, s)) <= eps;
       }
       if (!collinear) break;
       k = end;
     }
-    outN.push(nodes[k]);
-    outH.push(half[k]);
+    keep.push(k);
     a = k;
   }
-  return { nodes: outN, half: outH };
+  return keep;
+}
+
+function simplifyCollinear(nodes: Node[], half: number[], eps: number): { nodes: Node[]; half: number[] } {
+  if (nodes.length <= 2 || eps <= 0) return { nodes, half };
+  const keep = collinearKeep(nodes, eps);
+  return { nodes: keep.map(i => nodes[i]), half: keep.map(i => half[i]) };
 }
 
 // --- centerline (cardinal spline → cubic bezier) ---
@@ -304,7 +314,15 @@ function cornerDiscs(nodes: Node[], half: number[]): string[] {
 
 // --- public entry point ---
 
-export function renderStroke(stroke: Stroke, options: RenderOptions = {}): StrokeRender {
+// Reduce a raw stroke's point count with the same time-chord test the renderer
+// uses for its `simplify` option — drop samples within `eps` px of the chord
+// their neighbours interpolate by time. Keeps x/y/t/p on the surviving points.
+export function simplifyStroke(stroke: Stroke, eps: number): Stroke {
+  if (stroke.length <= 2 || eps <= 0) return stroke;
+  return collinearKeep(stroke, eps).map(i => stroke[i]);
+}
+
+export function renderStroke(stroke: Stroke, options: RenderOptions = {}, tapFloor = false): StrokeRender {
   const o = { ...RENDER_DEFAULTS, ...options };
 
   const nodes = collapse(stroke);
@@ -312,10 +330,22 @@ export function renderStroke(stroke: Stroke, options: RenderOptions = {}): Strok
 
   const half = smoothSeries(nodes.map((_, i) => halfWidth(nodes, i, o)), o.smoothWidth);
 
-  // A single position (a dot / held tap) → a circle that grows with hold time,
-  // floored so a quick tap is still a visible dot.
+  // A single position. While a stroke is in progress (or replaying), a lone node
+  // is the seed of a line, so render it at its plain width to grow seamlessly
+  // into the stroke. Only a committed standalone tap (`tapFloor`) gets the
+  // visible dot floor: its size is driven consistently across devices — real
+  // pressure (pen) follows how hard you pressed; without it (mouse/touch) a
+  // click's duration isn't a "hold to grow" gesture, so only a deliberate hold
+  // past DOT_TAP_MS grows it — floored so a light tap (a pen reporting ~0
+  // pressure, or a quick click) still reads.
   if (nodes.length === 1) {
-    const radius = Math.max(o.minWidth / 2, half[0]);
+    let radius = half[0];
+    if (tapFloor) {
+      const factor = o.pressureFromTime
+        ? clamp01((nodes[0].tOut - nodes[0].t - DOT_TAP_MS) / o.poolFull)
+        : clamp01(nodes[0].p / o.pressureMax);
+      radius = Math.max(o.minWidth, (o.minWidth + (o.maxWidth - o.minWidth) * factor) / 2);
+    }
     return { curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`, shapes: [dotPath(nodes[0], radius)], width: o.maxWidth };
   }
 

@@ -109,10 +109,27 @@ export const INK_COLOR = '#1a1a1a';
 export type InkOptions = Required<RenderOptions>;
 export const INK_DEFAULTS: InkOptions = { ...RENDER_DEFAULTS };
 
-// Draw the ink as of time `t` (Infinity = fully drawn).
-export function renderInk(stroke: Stroke, options: InkOptions, t: number): RenderedLine {
+// Whether the whole stroke is a standalone tap (barely any travel) rather than a
+// stroke that merely begins at one point before moving. Only a real tap gets the
+// dot's visible floor; a lone-node prefix of a longer stroke stays at its plain
+// width so it grows seamlessly instead of shrinking once more points arrive.
+function isTapStroke(stroke: Stroke): boolean {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of stroke) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return maxX - minX <= 1 && maxY - minY <= 1;
+}
+
+// Draw the ink as of time `t` (Infinity = fully drawn). `live` marks the
+// in-progress stroke, whose lone-node frames must not snap to the dot floor.
+export function renderInk(stroke: Stroke, options: InkOptions, t: number, live = false): RenderedLine {
   const pts = drawnPoints(stroke, t);
-  return pts.length ? renderStroke(pts, options) : { curve: '', width: options.maxWidth };
+  if (!pts.length) return { curve: '', width: options.maxWidth };
+  return renderStroke(pts, options, !live && isTapStroke(stroke));
 }
 
 // Debug geometry (centerline + outline points + raw recorded dots) as of `t`.

@@ -1,3 +1,5 @@
+import { simplifyStroke } from 'rescrawl';
+
 export type Point = { x: number; y: number; t: number; p: number };
 export type Stroke = Point[];
 
@@ -9,6 +11,10 @@ export const DEFAULT_CONFIG = {
 export type Config = typeof DEFAULT_CONFIG;
 
 // --- Bounds & framing ---
+
+// `t` is monotonic within a stroke, so its first/last sample are its time span.
+export const strokeStart = (s: Stroke): number => (s.length ? s[0].t : 0);
+export const strokeEnd = (s: Stroke): number => (s.length ? s[s.length - 1].t : 0);
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
@@ -34,6 +40,18 @@ export function reframe(strokes: Stroke[], pad: number): Stroke[] {
   return strokes.map(stroke =>
     stroke.map(pt => ({ ...pt, x: pt.x + dx, y: pt.y + dy }))
   );
+}
+
+// --- Simplification ---
+// Reduce stored point count (and file size) using rescrawl's own simplify logic,
+// so export matches what the renderer's `simplify` option does.
+export function simplifyStrokes(strokes: Stroke[], eps: number): Stroke[] {
+  if (eps <= 0) return strokes;
+  return strokes.map(s => simplifyStroke(s, eps));
+}
+
+export function countPoints(strokes: Stroke[]): number {
+  return strokes.reduce((n, s) => n + s.length, 0);
 }
 
 // The prefix of a stroke that has been drawn by time `t`: every sample with
