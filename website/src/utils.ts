@@ -16,6 +16,19 @@ export type Config = typeof DEFAULT_CONFIG;
 export const strokeStart = (s: Stroke): number => (s.length ? s[0].t : 0);
 export const strokeEnd = (s: Stroke): number => (s.length ? s[s.length - 1].t : 0);
 
+// Index of the stroke "active" at time `t`: the one with the latest start at or
+// before `t` (the stroke being drawn, or the most recent once the playhead is
+// past it). Null if `t` precedes every stroke.
+export function activeStrokeAt(strokes: Stroke[], t: number): number | null {
+  let idx: number | null = null;
+  let best = -Infinity;
+  for (let i = 0; i < strokes.length; i++) {
+    const s = strokeStart(strokes[i]);
+    if (s <= t && s >= best) { best = s; idx = i; }
+  }
+  return idx;
+}
+
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 export function strokesBounds(strokes: Stroke[]): Bounds | null {
@@ -77,26 +90,32 @@ export function drawnPoints(stroke: Stroke, t: number): Stroke {
 }
 
 // --- Serialization ---
-// Per stroke: first point absolute "x,y,t,p", rest relative "dx,dy,dt,dp".
-
-export function serializeBallpoint(strokes: Stroke[]): string {
-  return strokes.map(stroke =>
-    stroke.map((pt, i) => {
-      if (i === 0) return `${pt.x},${pt.y},${pt.t}`;
-      const prev = stroke[i - 1];
-      return `${pt.x - prev.x},${pt.y - prev.y},${pt.t - prev.t}`;
-    }).join(';')
-  ).join('\n');
-}
-
-export function serialize(strokes: Stroke[]): string {
-  return strokes.map(stroke =>
-    stroke.map((pt, i) => {
-      if (i === 0) return `${pt.x},${pt.y},${pt.t},${pt.p}`;
-      const prev = stroke[i - 1];
-      return `${pt.x - prev.x},${pt.y - prev.y},${pt.t - prev.t},${pt.p - prev.p}`;
-    }).join(';')
-  ).join('\n');
+// Strokes are newline-separated; points within a stroke are ";"-separated. A
+// point is "x,y,t,p" (or "x,y,t" in ballpoint mode). By default the first point
+// of each stroke is absolute and the rest are deltas from the previous point.
+// Options:
+//   ballpoint — drop pressure, and the trailing pointer-up/cancel sample (p:0,
+//               position duplicating the previous point), which then carries
+//               nothing.
+//   relative  — chain deltas across strokes too, so only the very first point of
+//               the file is absolute. Lossy on import (stroke origins are no
+//               longer recoverable independently) — for size experiments only.
+export function serialize(strokes: Stroke[], opts: { ballpoint?: boolean; relative?: boolean } = {}): string {
+  const { ballpoint = false, relative = false } = opts;
+  let prev: Point | null = null;
+  return strokes.map(stroke => {
+    const pts = ballpoint && stroke.length > 1 ? stroke.slice(0, -1) : stroke;
+    const line = pts.map((pt, i) => {
+      const ref = i === 0 ? (relative ? prev : null) : pts[i - 1];
+      const x = pt.x - (ref?.x ?? 0);
+      const y = pt.y - (ref?.y ?? 0);
+      const t = pt.t - (ref?.t ?? 0);
+      const p = pt.p - (ref?.p ?? 0);
+      return ballpoint ? `${x},${y},${t}` : `${x},${y},${t},${p}`;
+    }).join(';');
+    if (pts.length) prev = pts[pts.length - 1];
+    return line;
+  }).join('\n');
 }
 
 export function deserialize(text: string): Stroke[] {

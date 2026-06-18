@@ -74,7 +74,7 @@ type StrokeAction =
   | { type: 'draw'; stroke: Stroke }
   | { type: 'delete'; index: number }
   | { type: 'swap'; index: number }
-  | { type: 'editFirst'; index: number; field: EditField; value: number }
+  | { type: 'editFirst'; index: number; field: EditField; value: number; propagate?: boolean }
   | { type: 'clear' }
   | { type: 'replaceAll'; strokes: Stroke[] }
   | { type: 'select'; index: number | null }
@@ -112,7 +112,16 @@ function reducer(state: StrokeState, action: StrokeAction): StrokeState {
       return withOp(state, { type: 'swap', index: i }, { strokes: applySwap(state.strokes, i) });
     }
     case 'editFirst': {
-      const { index, field, value } = action;
+      const { index, field, value, propagate } = action;
+      // Propagated timing shift: move this stroke and every later one by the same
+      // dt so the gaps after it are preserved. Snapshotted as a bulk op.
+      if (field === 't' && propagate) {
+        const delta = value - state.strokes[index][0].t;
+        const next = state.strokes.map((s, i) =>
+          i >= index ? s.map(pt => ({ ...pt, t: pt.t + delta })) : s,
+        );
+        return withOp(state, { type: 'bulk', from: state.strokes, to: next }, { strokes: next });
+      }
       return withOp(state, { type: 'edit', index, field, from: state.strokes[index][0][field], to: value }, {
         strokes: applyEditFirst(state.strokes, index, field, value),
       });
@@ -162,7 +171,7 @@ export function useStrokeStore() {
     draw: (stroke: Stroke) => dispatch({ type: 'draw', stroke }),
     deleteStroke: (index: number) => dispatch({ type: 'delete', index }),
     swapStrokes: (index: number) => dispatch({ type: 'swap', index }),
-    editFirstPoint: (index: number, field: EditField, value: number) => dispatch({ type: 'editFirst', index, field, value }),
+    editFirstPoint: (index: number, field: EditField, value: number, propagate?: boolean) => dispatch({ type: 'editFirst', index, field, value, propagate }),
     clear: () => dispatch({ type: 'clear' }),
     replaceAll: (strokes: Stroke[]) => dispatch({ type: 'replaceAll', strokes }),
     select: (index: number | null) => dispatch({ type: 'select', index }),

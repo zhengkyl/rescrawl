@@ -2,7 +2,7 @@ import { useRef, useEffect, useMemo, useState } from 'preact/hooks';
 import { useApp } from '../context';
 import { INK_COLOR, renderInk } from '../curves';
 import { useCanvasView } from '../hooks/useCanvasView';
-import { countPoints, reframe, serialize, serializeBallpoint, simplifyStrokes, strokesBounds } from '../utils';
+import { countPoints, reframe, serialize, simplifyStrokes, strokesBounds } from '../utils';
 import { drawLine } from './strokeRender';
 
 const DEFAULT_PADDING = 40;
@@ -14,12 +14,13 @@ function formatBytes(n: number): string {
 }
 
 export function ExportDialog() {
-  const { store, inkOptions, exportOpen: open, setExportOpen } = useApp();
+  const { store, inkOptions, setExportOpen } = useApp();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [filename, setFilename] = useState('');
   const [padding, setPadding] = useState(DEFAULT_PADDING);
   const [simplify, setSimplify] = useState(0);
   const [ballpoint, setBallpoint] = useState(false);
+  const [relative, setRelative] = useState(false);
 
   // Preview camera: left-drag pans (button 0) since there's no drawing here.
   const view = useCanvasView(store.strokes, 0);
@@ -29,8 +30,8 @@ export function ExportDialog() {
   const bounds = strokesBounds(simplified);
   const text = useMemo(() => {
     const effective = reframe(simplified, padding);
-    return ballpoint ? serializeBallpoint(effective) : serialize(effective);
-  }, [simplified, padding, ballpoint]);
+    return serialize(effective, { ballpoint, relative });
+  }, [simplified, padding, ballpoint, relative]);
   const fileSize = useMemo(() => new TextEncoder().encode(text).length, [text]);
 
   const onClose = () => setExportOpen(false);
@@ -45,19 +46,14 @@ export function ExportDialog() {
     onClose();
   }
 
+  // Mounted only while open (see Workspace), so this fires once: enter the top
+  // layer and frame the strokes. Fields default via useState, so no reset needed;
+  // closing (Esc, Cancel, or Export) clears `exportOpen`, which unmounts us.
   useEffect(() => {
-    const dialog = dialogRef.current!;
-    if (open) {
-      setFilename('');
-      setSimplify(0);
-      setBallpoint(false);
-      dialog.showModal();
-      view.fitToView(); // svg now laid out; frame the strokes
-    } else {
-      dialog.close();
-    }
+    dialogRef.current!.showModal();
+    view.fitToView(); // svg now laid out; frame the strokes
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, []);
 
   function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
@@ -136,6 +132,12 @@ export function ExportDialog() {
           <label>
             <input type="checkbox" id="export-ballpoint" checked={ballpoint} onChange={(e) => setBallpoint((e.target as HTMLInputElement).checked)} />
             {' '}Ballpoint mode (omit pressure)
+          </label>
+        </div>
+        <div class="dialog-field">
+          <label>
+            <input type="checkbox" id="export-relative" checked={relative} onChange={(e) => setRelative((e.target as HTMLInputElement).checked)} />
+            {' '}All points relative (smaller; not re-importable)
           </label>
         </div>
         <div class="dialog-actions">

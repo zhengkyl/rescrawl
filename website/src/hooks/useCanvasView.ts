@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Stroke } from '../utils';
 import { strokesBounds } from '../utils';
 
-const MIN_ZOOM = 0.05;
-const MAX_ZOOM = 10;
+export const MIN_ZOOM = 0.05;
+export const MAX_ZOOM = 10;
 const FIT_PAD = 40; // padding when fitting view to content
 
 type View = { panX: number; panY: number; zoom: number };
@@ -21,9 +21,16 @@ export function useCanvasView(strokes: Stroke[], panButton = 1) {
 
   const viewRef = useRef<View>({ panX: 0, panY: 0, zoom: 1 });
 
+  // Mirror the zoom for the UI (slider + readout). The transform is applied
+  // imperatively for perf; this state only changes when zoom does — panning
+  // calls setZoom with the same value, which React bails out of, so the frequent
+  // pan path stays render-free.
+  const [zoom, setZoom] = useState(1);
+
   function applyView(v: View) {
     viewRef.current = v;
     viewportRef.current?.setAttribute('transform', `translate(${v.panX},${v.panY}) scale(${v.zoom})`);
+    setZoom(v.zoom);
   }
 
   function pan(dx: number, dy: number) {
@@ -43,6 +50,14 @@ export function useCanvasView(strokes: Stroke[], panButton = 1) {
     const cx = (mx - panX) / zoom;
     const cy = (my - panY) / zoom;
     applyView({ panX: mx - cx * newZoom, panY: my - cy * newZoom, zoom: newZoom });
+  }
+
+  // Zoom to an absolute level about the viewport centre — used by the slider.
+  function zoomTo(z: number) {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const rect = svg.getBoundingClientRect();
+    zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, clampZoom(z) / viewRef.current.zoom);
   }
 
   function svgToContent(clientX: number, clientY: number): { x: number; y: number } {
@@ -73,9 +88,9 @@ export function useCanvasView(strokes: Stroke[], panButton = 1) {
     applyView({ panX: rect.width / 2 - cx * zoom, panY: rect.height / 2 - cy * zoom, zoom });
   }
 
-  // Mount: fit, and attach the camera input gestures — wheel to zoom and
-  // middle-mouse drag to pan. Owning the pan gesture here (rather than in the
-  // drawing pointer handlers) keeps the camera fully self-contained.
+  // Mount: fit, and attach the camera input gestures — wheel to pan, ctrl+wheel
+  // to zoom, and middle-mouse drag to pan. Owning the pan gesture here (rather
+  // than in the drawing pointer handlers) keeps the camera fully self-contained.
   useEffect(() => {
     fitToView();
     const svg = svgRef.current;
@@ -87,7 +102,11 @@ export function useCanvasView(strokes: Stroke[], panButton = 1) {
 
     function handleWheel(e: WheelEvent) {
       e.preventDefault();
-      zoomAt(e.clientX, e.clientY, Math.pow(1.001, -e.deltaY));
+      // Ctrl+wheel zooms about the cursor (also the trackpad pinch gesture, which
+      // browsers report as a ctrl-wheel); a plain wheel pans. Scrolling down moves
+      // the content up, matching normal document scrolling.
+      if (e.ctrlKey) zoomAt(e.clientX, e.clientY, Math.pow(1.001, -e.deltaY));
+      else pan(-e.deltaX, -e.deltaY);
     }
     function handlePointerDown(e: PointerEvent) {
       if (e.button !== panButton) return;
@@ -118,5 +137,5 @@ export function useCanvasView(strokes: Stroke[], panButton = 1) {
     };
   }, []);
 
-  return { svgRef, viewportRef, fitToView, svgToContent };
+  return { svgRef, viewportRef, fitToView, svgToContent, zoom, zoomTo };
 }

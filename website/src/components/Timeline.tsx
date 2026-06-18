@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useApp } from '../context';
 import type { Stroke } from '../utils';
-import { strokeEnd, strokeStart } from '../utils';
+import { activeStrokeAt, strokeEnd, strokeStart } from '../utils';
 
 // Fixed time scale: the timeline never rescales, it only grows wider and scrolls
 // as the recording's duration increases — like a video/audio editor track.
@@ -235,6 +235,10 @@ export function Timeline() {
 
   const empty = duration <= 0;
 
+  // Highlight the segment of the stroke under the playhead (while not recording),
+  // mirroring the canvas's active-stroke highlight.
+  const activeStroke = recording ? null : activeStrokeAt(store.strokes, elapsed);
+
   return (
     <div class={`timeline${recording ? ' is-live' : ''}`}>
       <div class="timeline-header">
@@ -252,7 +256,7 @@ export function Timeline() {
           onPointerUp={onPointerUp}
         >
           <Ruler duration={duration} />
-          <StrokesLayer spans={layout.spans} lanes={displayLanes} selected={store.selectedStroke} live={liveSpan} />
+          <StrokesLayer spans={layout.spans} lanes={displayLanes} selected={activeStroke} live={liveSpan} />
           <div class="timeline-played" style={{ width: `${playedX}px` }} />
           {showTentative && (
             <div

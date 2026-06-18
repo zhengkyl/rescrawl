@@ -15,6 +15,7 @@ export function useReplay(strokes: Stroke[]) {
   const rafRef = useRef<number | null>(null);
   const elapsedRef = useRef(0);
   const durRef = useRef(0);
+  const pinRef = useRef(false); // suppress the next follow-to-end: an explicit seek owns the head
 
   const [elapsed, setElapsedState] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -28,10 +29,12 @@ export function useReplay(strokes: Stroke[]) {
 
   // Recompute duration when strokes change. Keep the playhead pinned to the end
   // while it's already there (e.g. after drawing) so the time position tracks
-  // the latest content; a deliberate mid-scrub position is left untouched.
+  // the latest content; a deliberate mid-scrub position is left untouched. A
+  // pinned seek in the same tick (undo/redo) also overrides the follow.
   useEffect(() => {
     const dur = totalDuration(strokes);
-    const followEnd = elapsedRef.current >= durRef.current;
+    const followEnd = !pinRef.current && elapsedRef.current >= durRef.current;
+    pinRef.current = false;
     durRef.current = dur;
     setDuration(dur);
     if (followEnd) setElapsed(dur);
@@ -74,11 +77,15 @@ export function useReplay(strokes: Stroke[]) {
   }
 
   // Move the playhead without entering replay-clip mode — used by recording to
-  // seed the head and to leave it at the end of a just-drawn stroke.
-  function seek(ms: number) {
+  // seed the head and to leave it at the end of a just-drawn stroke. `pin` keeps
+  // the head exactly here even if strokes change in the same tick, suppressing
+  // the follow-to-end that would otherwise snap it to the new content end (used
+  // by undo/redo to restore a deliberate position past the content end).
+  function seek(ms: number, pin = false) {
     pause();
     setElapsed(ms);
     setIsReplaying(false);
+    if (pin) pinRef.current = true;
   }
 
   function toggle() {

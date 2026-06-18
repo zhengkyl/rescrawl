@@ -5,7 +5,7 @@ import type { ActiveStrategy, DebugLayers, InkOptions } from '../curves';
 import { getActiveStrategies, INK_COLOR, inkDebug, renderInk, STRATEGY_DEFS } from '../curves';
 import { useStrokeCache } from '../hooks/useStrokeCache';
 import type { Stroke } from '../utils';
-import { strokeEnd, strokeStart } from '../utils';
+import { activeStrokeAt, strokeEnd, strokeStart } from '../utils';
 import { CanvasBackground } from './CanvasBackground';
 import { drawLine } from './strokeRender';
 
@@ -208,9 +208,13 @@ export function App() {
 
   // --- Derived render data ---
 
-  const { strokes, selectedStroke, insertionPoint } = store;
+  const { strokes, insertionPoint } = store;
   const activeStrategies = useMemo(() => getActiveStrategies(strategies), [strategies]);
   const primaryStrategy: ActiveStrategy = activeStrategies[0] ?? { def: STRATEGY_DEFS[0], param: 0 };
+
+  // The stroke under the playhead — highlighted while reviewing (not recording)
+  // so it's clear which stroke the current time belongs to.
+  const activeStroke = live.isLive ? null : activeStrokeAt(strokes, replay.elapsed);
 
   // Renderers draw each stroke "as of" this time; the playhead during replay,
   // otherwise fully drawn. Only clip when the playhead is genuinely mid-timeline:
@@ -274,9 +278,9 @@ export function App() {
         {activeInk}
         {overlayLayer}
 
-        {/* Selected stroke highlight */}
-        {!replay.isReplaying && selectedStroke !== null && strokes[selectedStroke] && (
-          <g>{drawLine(primaryStrategy.def.render(strokes[selectedStroke], primaryStrategy.param, Infinity), 'sel', '#4f8ef7')}</g>
+        {/* Active stroke highlight (under the playhead, while not recording) */}
+        {activeStroke !== null && strokes[activeStroke] && (
+          <g>{drawLine(primaryStrategy.def.render(strokes[activeStroke], primaryStrategy.param, drawTime), 'active', '#4f8ef7')}</g>
         )}
 
         {/* In-progress stroke — ink base plus any active overlay curves */}

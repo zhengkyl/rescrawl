@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 
-const LIVE_TIMEOUT = 2000; // ms of idle after a stroke before live mode ends
+export const LIVE_TIMEOUT = 2000; // ms of idle after a stroke before live mode ends
 
 // Owns the recording clock. Stroke timings only advance while "live" (drawing
 // plus a short grace period after each stroke), which naturally caps the gap
