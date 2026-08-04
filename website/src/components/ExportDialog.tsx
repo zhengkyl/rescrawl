@@ -19,7 +19,6 @@ export function ExportDialog() {
   const [filename, setFilename] = useState('');
   const [padding, setPadding] = useState(DEFAULT_PADDING);
   const [simplify, setSimplify] = useState(0);
-  const [ballpoint, setBallpoint] = useState(false);
   const [relative, setRelative] = useState(false);
 
   // Preview camera: left-drag pans (button 0) since there's no drawing here.
@@ -30,8 +29,8 @@ export function ExportDialog() {
   const bounds = strokesBounds(simplified);
   const text = useMemo(() => {
     const effective = reframe(simplified, padding);
-    return serialize(effective, { ballpoint, relative });
-  }, [simplified, padding, ballpoint, relative]);
+    return serialize(effective, { relative });
+  }, [simplified, padding, relative]);
   const fileSize = useMemo(() => new TextEncoder().encode(text).length, [text]);
 
   const onClose = () => setExportOpen(false);
@@ -127,12 +126,6 @@ export function ExportDialog() {
         <div class="dialog-field export-size">
           <span>{countPoints(simplified).toLocaleString()} points{simplify > 0 && ` (of ${countPoints(store.strokes).toLocaleString()})`}</span>
           <span class="field-value">{formatBytes(fileSize)}</span>
-        </div>
-        <div class="dialog-field">
-          <label>
-            <input type="checkbox" id="export-ballpoint" checked={ballpoint} onChange={(e) => setBallpoint((e.target as HTMLInputElement).checked)} />
-            {' '}Ballpoint mode (omit pressure)
-          </label>
         </div>
         <div class="dialog-field">
           <label>

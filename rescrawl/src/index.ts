@@ -1,58 +1,52 @@
 // rescrawl — turn a single recorded stroke into renderable ink geometry:
 // a cubic centerline plus a variable-width outline (the filled shape).
 //
-// Width is driven by per-node pressure, mapped to a half-width between
-// `minWidth` and `maxWidth`. The pressure can come from the device, or — when
-// `pressureFromTime` is set — be simulated from timing, so devices with no real
-// pressure (mouse, plain touch) still get expressive ink. Two timings combine:
-//   • motion: how fast the pen swept THROUGH a node (travel time to the next,
-//     excluding any pause). Ramps over `flowFull` ms — fast = thin, slow = thick.
-//   • pool: how long the pen sat STILL at a node. Ramps over the much longer
-//     `poolFull` ms, so a quick tap stays small and only a deliberate hold grows
-//     the dot toward maxWidth. The held tip is fed live by the draw-loop tip /
-//     pointer-up point.
-// The wider of the two wins, both capped at full, so neither exceeds maxWidth.
+// Width is driven purely by timing, mapped to a half-width between `minWidth`
+// and `maxWidth`. No device pressure is used, so every input (pen, mouse, plain
+// touch) produces the same expressive ink.
+//
+// A recorded stroke freezes the pen's dwell before it moves on: every new
+// position is preceded by a coincident sample stamped with the same time. So
+// time is only ever spent BETWEEN two samples, never at one, and each node needs
+// a single number — `dt`, how long the pen lingered there before reaching the
+// next distinct position (for the last node, before the pen lifted). Long dt
+// means the pen dawdled or held still, so the ink is thick; short dt means it
+// swept through, so the ink is thin. `dwellFull` is the dt that reaches maxWidth.
 //
 // Stability: the renderer is called fresh with a growing prefix (live drawing,
 // replay scrubbing). Earlier geometry never moves or shrinks — the centerline
 // clamps its last control point (only the final segment is live) and each gap
 // freezes once the next point exists.
 
-export type StrokePoint = { x: number; y: number; t: number; p: number };
+export type StrokePoint = { x: number; y: number; t: number };
 export type Stroke = StrokePoint[];
 
 export type RenderOptions = {
-  minWidth?: number;    // stroke width at min pressure
-  maxWidth?: number;    // stroke width at max pressure
-  pressureMax?: number; // p value treated as full pressure
-  pressureFromTime?: boolean; // ignore recorded pressure; simulate it from timing
-  flowFull?: number;    // ms of slow motion through a point to reach full simulated width
-  poolFull?: number;    // ms of holding still at a point to grow the dot to full width
+  minWidth?: number; // thinnest stroke width (fast motion, no dwell)
+  maxWidth?: number; // thickest stroke width (slow motion or a long dwell)
+  dwellFull?: number; // ms lingering at a point to reach full width
   smoothWidth?: number; // moving-average passes over the (noisy) per-point width
-  smooth?: number;      // centerline spline smoothing, 0..1
-  simplify?: number;    // px: collapse near-collinear runs within this tolerance (0 = off)
+  smooth?: number; // centerline spline smoothing, 0..1
+  simplify?: number; // px: collapse near-collinear runs within this tolerance (0 = off)
 };
 
 export type StrokeRender = {
-  curve: string;     // centerline path `d`
-  shapes: string[];  // variable-width outline parts in draw order
-  width: number;     // max full width
+  curve: string; // centerline path `d`
+  shapes: string[]; // variable-width outline parts in draw order
+  width: number; // max full width
 };
 
 export const RENDER_DEFAULTS: Required<RenderOptions> = {
   minWidth: 1.5,
   maxWidth: 8,
-  pressureMax: 8192,
-  pressureFromTime: true,
-  flowFull: 25,
-  poolFull: 400,
+  dwellFull: 25,
   smoothWidth: 4,
   smooth: 1,
   simplify: 0.75,
 };
 
 const COINCIDENT_EPS = 0.5; // px — points closer than this are the same position
-const DOT_TAP_MS = 250;     // a standalone tap held this briefly is just a dot, not a "hold to grow"
+const DOT_TAP_MS = 250; // a standalone tap held this briefly is just a dot, not a "hold to grow"
 
 // --- small helpers ---
 
@@ -62,64 +56,30 @@ const clamp01 = (n: number) => (n < 0 ? 0 : n > 1 ? 1 : n);
 type Vec = { x: number; y: number };
 
 // A node is a distinct pen position. Runs of coincident samples collapse into
-// one node; `t` is the arrival time and `tOut` the departure time (so travel
-// speed to the next node excludes any time spent stationary here).
-type Node = { x: number; y: number; t: number; tOut: number; p: number };
+// one node; `t` is when the pen arrived and `dt` how long it lingered before
+// reaching the next distinct position — or, for the last node, before it lifted.
+type Node = { x: number; y: number; t: number; dt: number };
 
 function collapse(stroke: Stroke): Node[] {
   const nodes: Node[] = [];
   for (const pt of stroke) {
     const last = nodes[nodes.length - 1];
-    if (last && Math.abs(last.x - pt.x) < COINCIDENT_EPS && Math.abs(last.y - pt.y) < COINCIDENT_EPS) {
-      last.tOut = pt.t;
-      last.p = Math.max(last.p, pt.p);
-    } else {
-      nodes.push({ x: pt.x, y: pt.y, t: pt.t, tOut: pt.t, p: pt.p });
-    }
+    if (
+      last &&
+      Math.abs(last.x - pt.x) < COINCIDENT_EPS &&
+      Math.abs(last.y - pt.y) < COINCIDENT_EPS
+    )
+      continue;
+    nodes.push({ x: pt.x, y: pt.y, t: pt.t, dt: 0 });
+  }
+  // Time is spent between samples, never at one: a node holds until the next
+  // distinct position appears, and the last until the stroke's final sample.
+  const end = stroke.length ? stroke[stroke.length - 1].t : 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const until = i + 1 < nodes.length ? nodes[i + 1].t : end;
+    nodes[i].dt = Math.max(0, until - nodes[i].t);
   }
   return nodes;
-}
-
-// --- per-node half-width, from pressure ---
-//
-// Pressure (0..pressureMax) maps linearly to a half-width in [minWidth/2,
-// maxWidth/2]. When `pressureFromTime` is set the recorded pressure is ignored
-// and simulated from timing, as the wider of two effects (see the file header):
-// fast motion through the node (travel time, over `flowFull`) and a stationary
-// hold at it (sat time, over the much longer `poolFull`). Both clamp at full, so
-// the result never exceeds a full-pressure stroke.
-//
-// Motion uses the outgoing segment, except at the leading edge (the live tip /
-// final node), which has no outgoing segment and instead borrows the *incoming*
-// one. That keeps the tip's width frozen at the speed it was drawn — matching
-// the body, so the end cap reads as a round nib — instead of decaying to a thin
-// taper that the live `sat` then pulses up and down between frames. Because
-// `flowFull` ≪ `poolFull`, motion dominates while the pen moves; only a genuine
-// hold (sat far longer than a normal draw gap) lets the pool grow the dot.
-function halfWidth(nodes: Node[], i: number, o: Required<RenderOptions>): number {
-  let pressureFactor: number;
-  if (o.pressureFromTime) {
-    const sat = nodes[i].tOut - nodes[i].t;                          // time sat still here
-    const travel = i < nodes.length - 1
-      ? nodes[i + 1].t - nodes[i].tOut                               // outgoing: time moving to the next
-      : i > 0 ? nodes[i].t - nodes[i - 1].tOut : 0;                  // tip: borrow the incoming segment
-    pressureFactor = Math.max(clamp01(travel / o.flowFull), clamp01(sat / o.poolFull));
-  } else {
-    pressureFactor = clamp01(nodes[i].p / o.pressureMax);
-  }
-  return (o.minWidth + (o.maxWidth - o.minWidth) * pressureFactor) / 2;
-}
-
-// Moving-average smooth of a per-node series ([1,2,1]/4), endpoints fixed. The
-// inter-point time (hence raw width) is noisy; this keeps the stroke smooth.
-function smoothSeries(arr: number[], passes: number): number[] {
-  let cur = arr;
-  for (let p = 0; p < passes && cur.length > 2; p++) {
-    const next = cur.slice();
-    for (let i = 1; i < cur.length - 1; i++) next[i] = (cur[i - 1] + 2 * cur[i] + cur[i + 1]) / 4;
-    cur = next;
-  }
-  return cur;
 }
 
 // --- decimate near-collinear runs (slow drawing records far more points than
@@ -147,11 +107,13 @@ function collinearKeep(pts: { x: number; y: number; t: number }[], eps: number):
   while (a < n - 1) {
     let k = a + 1; // furthest endpoint whose run stays within tolerance
     while (k < n - 1) {
-      const end = k + 1, dt = pts[end].t - pts[a].t;
+      const end = k + 1,
+        dt = pts[end].t - pts[a].t;
       let collinear = dt > 0;
       for (let j = a + 1; collinear && j <= k; j++) {
         const s = (pts[j].t - pts[a].t) / dt;
-        collinear = Math.abs(pts[j].x - lerp(pts[a].x, pts[end].x, s)) <= eps &&
+        collinear =
+          Math.abs(pts[j].x - lerp(pts[a].x, pts[end].x, s)) <= eps &&
           Math.abs(pts[j].y - lerp(pts[a].y, pts[end].y, s)) <= eps;
       }
       if (!collinear) break;
@@ -163,12 +125,6 @@ function collinearKeep(pts: { x: number; y: number; t: number }[], eps: number):
   return keep;
 }
 
-function simplifyCollinear(nodes: Node[], half: number[], eps: number): { nodes: Node[]; half: number[] } {
-  if (nodes.length <= 2 || eps <= 0) return { nodes, half };
-  const keep = collinearKeep(nodes, eps);
-  return { nodes: keep.map(i => nodes[i]), half: keep.map(i => half[i]) };
-}
-
 // --- centerline (cardinal spline → cubic bezier) ---
 //
 // A cardinal spline through `pts`, emitted as chained cubic beziers (no leading
@@ -177,11 +133,16 @@ function simplifyCollinear(nodes: Node[], half: number[], eps: number): { nodes:
 // to themselves, so the first/last segment is frozen as soon as it exists.
 function splineSegments(pts: Vec[], smooth: number): string {
   const n = pts.length;
-  let d = '';
+  let d = "";
   for (let i = 0; i < n - 1; i++) {
-    const p0 = pts[Math.max(i - 1, 0)], p1 = pts[i], p2 = pts[i + 1], p3 = pts[Math.min(i + 2, n - 1)];
-    const c1x = r(p1.x + (smooth * (p2.x - p0.x)) / 6), c1y = r(p1.y + (smooth * (p2.y - p0.y)) / 6);
-    const c2x = r(p2.x - (smooth * (p3.x - p1.x)) / 6), c2y = r(p2.y - (smooth * (p3.y - p1.y)) / 6);
+    const p0 = pts[Math.max(i - 1, 0)],
+      p1 = pts[i],
+      p2 = pts[i + 1],
+      p3 = pts[Math.min(i + 2, n - 1)];
+    const c1x = r(p1.x + (smooth * (p2.x - p0.x)) / 6),
+      c1y = r(p1.y + (smooth * (p2.y - p0.y)) / 6);
+    const c2x = r(p2.x - (smooth * (p3.x - p1.x)) / 6),
+      c2y = r(p2.y - (smooth * (p3.y - p1.y)) / 6);
     d += ` C ${c1x},${c1y} ${c2x},${c2y} ${r(p2.x)},${r(p2.y)}`;
   }
   return d;
@@ -197,9 +158,11 @@ function centerlinePath(nodes: Node[], smooth: number): string {
 // Filled circle, for a single-point stroke (a dot / held tap).
 function dotPath(c: Vec, radius: number): string {
   const rad = Math.max(radius, 0.5);
-  return `M ${r(c.x - rad)},${r(c.y)} ` +
+  return (
+    `M ${r(c.x - rad)},${r(c.y)} ` +
     `A ${r(rad)},${r(rad)} 0 1 0 ${r(c.x + rad)},${r(c.y)} ` +
-    `A ${r(rad)},${r(rad)} 0 1 0 ${r(c.x - rad)},${r(c.y)} Z`;
+    `A ${r(rad)},${r(rad)} 0 1 0 ${r(c.x - rad)},${r(c.y)} Z`
+  );
 }
 
 // Per-node left/right outline points. Each node is a circle of radius half[i];
@@ -214,20 +177,34 @@ function dotPath(c: Vec, radius: number): string {
 // thin line) keeps a visible cap instead of collapsing both contacts onto one
 // pole. `sinp` is returned so the caps can pick the right arc sweep.
 const MAX_TILT = 0.9;
-function offsetPoints(nodes: Node[], half: number[], i: number): { left: Vec; right: Vec; sinp: number } {
+function offsetPoints(
+  nodes: Node[],
+  half: number[],
+  i: number,
+): { left: Vec; right: Vec; sinp: number } {
   const n = nodes.length;
-  const a = Math.max(i - 1, 0), b = Math.min(i + 1, n - 1);
-  let tx = nodes[b].x - nodes[a].x, ty = nodes[b].y - nodes[a].y;
+  const a = Math.max(i - 1, 0),
+    b = Math.min(i + 1, n - 1);
+  let tx = nodes[b].x - nodes[a].x,
+    ty = nodes[b].y - nodes[a].y;
   const ds = Math.hypot(tx, ty) || 1;
-  tx /= ds; ty /= ds;            // unit tangent (direction of travel)
-  const px = -ty, py = tx;       // unit normal, 90° left of travel
+  tx /= ds;
+  ty /= ds; // unit tangent (direction of travel)
+  const px = -ty,
+    py = tx; // unit normal, 90° left of travel
   let sinp = -(half[b] - half[a]) / ds;
   sinp = sinp < -MAX_TILT ? -MAX_TILT : sinp > MAX_TILT ? MAX_TILT : sinp;
   const cosp = Math.sqrt(1 - sinp * sinp);
   const h = half[i];
   return {
-    left: { x: nodes[i].x + (cosp * px + sinp * tx) * h, y: nodes[i].y + (cosp * py + sinp * ty) * h },
-    right: { x: nodes[i].x + (-cosp * px + sinp * tx) * h, y: nodes[i].y + (-cosp * py + sinp * ty) * h },
+    left: {
+      x: nodes[i].x + (cosp * px + sinp * tx) * h,
+      y: nodes[i].y + (cosp * py + sinp * ty) * h,
+    },
+    right: {
+      x: nodes[i].x + (-cosp * px + sinp * tx) * h,
+      y: nodes[i].y + (-cosp * py + sinp * ty) * h,
+    },
     sinp,
   };
 }
@@ -241,15 +218,21 @@ function offsetPoints(nodes: Node[], half: number[], i: number): { left: Vec; ri
 // Removing the contained node guarantees every surviving pair is far enough
 // apart to share a real tangent (ds > |Δhalf|), so the edge never folds.
 function dropContained(nodes: Node[], half: number[]): { nodes: Node[]; half: number[] } {
-  const outN: Node[] = [], outH: number[] = [];
+  const outN: Node[] = [],
+    outH: number[] = [];
   for (let i = 0; i < nodes.length; i++) {
     if (outN.length) {
-      const last = outN[outN.length - 1], lh = outH[outH.length - 1];
+      const last = outN[outN.length - 1],
+        lh = outH[outH.length - 1];
       const d = Math.hypot(nodes[i].x - last.x, nodes[i].y - last.y);
-      if (d + half[i] <= lh) continue;                 // node i sits inside the last kept node
-      if (d + lh <= half[i]) { outN.pop(); outH.pop(); } // last kept node sits inside node i
+      if (d + half[i] <= lh) continue; // node i sits inside the last kept node
+      if (d + lh <= half[i]) {
+        outN.pop();
+        outH.pop();
+      } // last kept node sits inside node i
     }
-    outN.push(nodes[i]); outH.push(half[i]);
+    outN.push(nodes[i]);
+    outH.push(half[i]);
   }
   return { nodes: outN, half: outH };
 }
@@ -269,16 +252,20 @@ function outlinePath(allNodes: Node[], allHalf: number[], o: Required<RenderOpti
   const n = nodes.length;
   // Everything collapsed into one pool → just the pool circle.
   if (n === 1) return dotPath(nodes[0], Math.max(half[0], 0.5));
-  const left: Vec[] = [], right: Vec[] = [];
-  let sinp0 = 0, sinpN = 0;
+  const left: Vec[] = [],
+    right: Vec[] = [];
+  let sinp0 = 0,
+    sinpN = 0;
   for (let i = 0; i < n; i++) {
     const e = offsetPoints(nodes, half, i);
-    left.push(e.left); right.push(e.right);
+    left.push(e.left);
+    right.push(e.right);
     if (i === 0) sinp0 = e.sinp;
     if (i === n - 1) sinpN = e.sinp;
   }
   const rightRev = right.slice().reverse();
-  const tip = r(half[n - 1]), tail = r(half[0]);
+  const tip = r(half[n - 1]),
+    tail = r(half[0]);
   // The caps are arcs of the end circles between the tilted edge contacts. Where
   // the width tapers the contacts shift toward the narrow side, so the cap that
   // wraps the wide back becomes a major arc (>180°): tail wraps the back, so it
@@ -287,11 +274,13 @@ function outlinePath(allNodes: Node[], allHalf: number[], o: Required<RenderOpti
   // bulging past its end; a zero half-width collapses the cap to a point.
   const tipLarge = sinpN < 0 ? 1 : 0;
   const tailLarge = sinp0 > 0 ? 1 : 0;
-  return `M ${r(left[0].x)},${r(left[0].y)}` +
+  return (
+    `M ${r(left[0].x)},${r(left[0].y)}` +
     splineSegments(left, o.smooth) +
     ` A ${tip},${tip} 0 ${tipLarge} 0 ${r(right[n - 1].x)},${r(right[n - 1].y)}` +
     splineSegments(rightRev, o.smooth) +
-    ` A ${tail},${tail} 0 ${tailLarge} 0 ${r(left[0].x)},${r(left[0].y)} Z`;
+    ` A ${tail},${tail} 0 ${tailLarge} 0 ${r(left[0].x)},${r(left[0].y)} Z`
+  );
 }
 
 // Round joins at sharp turns. The single-contour outline pinches where the
@@ -303,9 +292,12 @@ function outlinePath(allNodes: Node[], allHalf: number[], o: Required<RenderOpti
 function cornerDiscs(nodes: Node[], half: number[]): string[] {
   const discs: string[] = [];
   for (let i = 1; i < nodes.length - 1; i++) {
-    const ax = nodes[i].x - nodes[i - 1].x, ay = nodes[i].y - nodes[i - 1].y;
-    const bx = nodes[i + 1].x - nodes[i].x, by = nodes[i + 1].y - nodes[i].y;
-    const la = Math.hypot(ax, ay), lb = Math.hypot(bx, by);
+    const ax = nodes[i].x - nodes[i - 1].x,
+      ay = nodes[i].y - nodes[i - 1].y;
+    const bx = nodes[i + 1].x - nodes[i].x,
+      by = nodes[i + 1].y - nodes[i].y;
+    const la = Math.hypot(ax, ay),
+      lb = Math.hypot(bx, by);
     if (la === 0 || lb === 0) continue;
     if ((ax * bx + ay * by) / (la * lb) < 0) discs.push(dotPath(nodes[i], Math.max(half[i], 0.5)));
   }
@@ -316,37 +308,74 @@ function cornerDiscs(nodes: Node[], half: number[]): string[] {
 
 // Reduce a raw stroke's point count with the same time-chord test the renderer
 // uses for its `simplify` option — drop samples within `eps` px of the chord
-// their neighbours interpolate by time. Keeps x/y/t/p on the surviving points.
+// their neighbours interpolate by time. Keeps x/y/t on the surviving points.
 export function simplifyStroke(stroke: Stroke, eps: number): Stroke {
   if (stroke.length <= 2 || eps <= 0) return stroke;
-  return collinearKeep(stroke, eps).map(i => stroke[i]);
+  return collinearKeep(stroke, eps).map((i) => stroke[i]);
 }
 
-export function renderStroke(stroke: Stroke, options: RenderOptions = {}, tapFloor = false): StrokeRender {
+function simplifyCollinear(
+  nodes: Node[],
+  half: number[],
+  eps: number,
+): { nodes: Node[]; half: number[] } {
+  if (nodes.length <= 2 || eps <= 0) return { nodes, half };
+  const keep = collinearKeep(nodes, eps);
+  return { nodes: keep.map((i) => nodes[i]), half: keep.map((i) => half[i]) };
+}
+
+// Moving-average smooth of a per-node series ([1,2,1]/4), endpoints fixed. The
+// inter-point time (hence raw width) is noisy; this keeps the stroke smooth.
+function smoothSeries(arr: number[], passes: number): number[] {
+  let cur = arr;
+  for (let p = 0; p < passes && cur.length > 2; p++) {
+    const next = cur.slice();
+    for (let i = 1; i < cur.length - 1; i++) next[i] = (cur[i - 1] + 2 * cur[i] + cur[i + 1]) / 4;
+    cur = next;
+  }
+  return cur;
+}
+
+// --- per-node half-width, from timing ---
+//
+// The longer the pen lingered at a node, the wider the ink: `dt` ramps linearly
+// from minWidth to maxWidth over `dwellFull` ms, clamped so a long hold never
+// exceeds maxWidth.
+function halfWidth(node: Node, o: Required<RenderOptions>): number {
+  return (o.minWidth + (o.maxWidth - o.minWidth) * clamp01(node.dt / o.dwellFull)) / 2;
+}
+
+export function renderStroke(
+  stroke: Stroke,
+  options: RenderOptions = {},
+  tapFloor = false,
+): StrokeRender {
   const o = { ...RENDER_DEFAULTS, ...options };
 
   const nodes = collapse(stroke);
-  if (nodes.length === 0) return { curve: '', shapes: [], width: o.maxWidth };
+  if (nodes.length === 0) return { curve: "", shapes: [], width: o.maxWidth };
 
-  const half = smoothSeries(nodes.map((_, i) => halfWidth(nodes, i, o)), o.smoothWidth);
+  const half = smoothSeries(
+    nodes.map((n) => halfWidth(n, o)),
+    o.smoothWidth,
+  );
 
   // A single position. While a stroke is in progress (or replaying), a lone node
   // is the seed of a line, so render it at its plain width to grow seamlessly
   // into the stroke. Only a committed standalone tap (`tapFloor`) gets the
-  // visible dot floor: its size is driven consistently across devices — real
-  // pressure (pen) follows how hard you pressed; without it (mouse/touch) a
-  // click's duration isn't a "hold to grow" gesture, so only a deliberate hold
-  // past DOT_TAP_MS grows it — floored so a light tap (a pen reporting ~0
-  // pressure, or a quick click) still reads.
+  // visible dot floor: a quick tap isn't a "hold to grow" gesture, so only a
+  // deliberate hold past DOT_TAP_MS grows it — floored so a quick tap still reads.
   if (nodes.length === 1) {
     let radius = half[0];
     if (tapFloor) {
-      const factor = o.pressureFromTime
-        ? clamp01((nodes[0].tOut - nodes[0].t - DOT_TAP_MS) / o.poolFull)
-        : clamp01(nodes[0].p / o.pressureMax);
+      const factor = clamp01((nodes[0].dt - DOT_TAP_MS) / o.dwellFull);
       radius = Math.max(o.minWidth, (o.minWidth + (o.maxWidth - o.minWidth) * factor) / 2);
     }
-    return { curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`, shapes: [dotPath(nodes[0], radius)], width: o.maxWidth };
+    return {
+      curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`,
+      shapes: [dotPath(nodes[0], radius)],
+      width: o.maxWidth,
+    };
   }
 
   // Widths are computed above at full resolution; now drop redundant collinear
@@ -363,14 +392,25 @@ export function renderStroke(stroke: Stroke, options: RenderOptions = {}, tapFlo
 // Debug geometry: the cubic centerline path, every outline (offset) point — the
 // left/right edge of the ribbon at each node — and `dots`, the raw recorded
 // input positions the curve is fitted to.
-export function strokeDebug(stroke: Stroke, options: RenderOptions = {}): { curve: string; points: Vec[]; dots: Vec[] } {
+export function strokeDebug(
+  stroke: Stroke,
+  options: RenderOptions = {},
+): { curve: string; points: Vec[]; dots: Vec[] } {
   const o = { ...RENDER_DEFAULTS, ...options };
   const dots = stroke.map((p) => ({ x: p.x, y: p.y }));
   const nodes = collapse(stroke);
-  if (nodes.length === 0) return { curve: '', points: [], dots };
-  if (nodes.length === 1) return { curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`, points: [{ x: nodes[0].x, y: nodes[0].y }], dots };
+  if (nodes.length === 0) return { curve: "", points: [], dots };
+  if (nodes.length === 1)
+    return {
+      curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`,
+      points: [{ x: nodes[0].x, y: nodes[0].y }],
+      dots,
+    };
 
-  const half = smoothSeries(nodes.map((_, i) => halfWidth(nodes, i, o)), o.smoothWidth);
+  const half = smoothSeries(
+    nodes.map((n) => halfWidth(n, o)),
+    o.smoothWidth,
+  );
   const s = simplifyCollinear(nodes, half, o.simplify);
   const d = dropContained(s.nodes, s.half);
   const points: Vec[] = [];

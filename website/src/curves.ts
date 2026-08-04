@@ -144,9 +144,7 @@ export type InkControl = { key: NumericInkKey; label: string; min: number; max: 
 export const INK_CONTROLS: InkControl[] = [
   { key: 'minWidth', label: 'min width', min: 0, max: 20, step: 0.5 },
   { key: 'maxWidth', label: 'max width', min: 1, max: 40, step: 0.5 },
-  { key: 'pressureMax', label: 'pressure max', min: 1024, max: 16384, step: 256 },
-  { key: 'flowFull', label: 'flow full (ms)', min: 2, max: 200, step: 1 },
-  { key: 'poolFull', label: 'pool full (ms)', min: 50, max: 1500, step: 10 },
+  { key: 'dwellFull', label: 'dwell full (ms)', min: 2, max: 400, step: 1 },
   { key: 'smoothWidth', label: 'smooth width', min: 0, max: 12, step: 1 },
   { key: 'smooth', label: 'smooth', min: 0, max: 1, step: 0.05 },
   { key: 'simplify', label: 'simplify (px)', min: 0, max: 4, step: 0.05 },

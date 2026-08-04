@@ -3,8 +3,7 @@ import type { Dispatch, StateUpdater } from 'preact/hooks';
 import { useContext } from 'preact/hooks';
 import type { DebugLayers, InkOptions, StrategiesState } from './curves';
 import type { useCanvasView } from './hooks/useCanvasView';
-import type { useLiveRecording } from './hooks/useLiveRecording';
-import type { useReplay } from './hooks/useReplay';
+import type { Playhead } from './hooks/usePlayhead';
 import type { StrokeStore } from './strokeStore';
 import type { Config } from './utils';
 
@@ -14,8 +13,7 @@ import type { Config } from './utils';
 export type AppContextValue = {
   store: StrokeStore;
   view: ReturnType<typeof useCanvasView>;
-  replay: ReturnType<typeof useReplay>;
-  live: ReturnType<typeof useLiveRecording>;
+  clock: Playhead;
 
   config: Config;
   setConfig: Dispatch<StateUpdater<Config>>;

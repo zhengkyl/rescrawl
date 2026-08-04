@@ -6,14 +6,6 @@ export function InkPanel() {
   return (
     <>
       <div class="section-label">Ink</div>
-      <label class="ink-row">
-        <span class="ink-label">pressure from time</span>
-        <input
-          type="checkbox"
-          checked={options.pressureFromTime}
-          onInput={(e) => onChange({ ...options, pressureFromTime: (e.target as HTMLInputElement).checked })}
-        />
-      </label>
       {INK_CONTROLS.map(c => (
         <label class="ink-row" key={c.key}>
           <span class="ink-label">{c.label}</span>

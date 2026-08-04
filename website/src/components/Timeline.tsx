@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useLayoutEffect, useMemo, useRef } from 'preact/hooks';
 import { useApp } from '../context';
 import type { Stroke } from '../utils';
 import { activeStrokeAt, strokeEnd, strokeStart } from '../utils';
@@ -18,14 +18,14 @@ const msToPx = (ms: number) => ms * PX_PER_MS;
 
 type Span = { index: number; start: number; end: number; lane: number };
 
-const strokeSpan = (st: Stroke): [number, number] => [strokeStart(st), strokeEnd(st)];
-
 // Greedily pack strokes into lanes so overlapping spans stack instead of
 // colliding (interval-graph coloring). Strokes are placed in start order, each
 // into the first lane whose previous stroke has already ended.
 function layoutLanes(strokes: Stroke[]): { spans: Span[]; lanes: number } {
   const spans: Span[] = strokes.map((st, index) => {
-    const [start, end] = strokeSpan(st);
+
+    const start = strokeStart(st)
+    const end = strokeEnd(st)
     return { index, start, end, lane: 0 };
   });
   const order = [...spans].sort((a, b) => a.start - b.start);
@@ -129,52 +129,35 @@ function StrokesLayer({ spans, lanes, selected, live }: { spans: Span[]; lanes: 
 }
 
 export function Timeline() {
-  const { replay, live, store } = useApp();
-  const { scrub, isPlaying } = replay;
+  const { clock, store } = useApp();
+  const { seek, isPlaying } = clock;
 
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
 
   const layout = useMemo(() => layoutLanes(store.strokes), [store.strokes]);
 
-  const recording = live.isLive;
+  const recording = clock.isRecording;
   const canPlay = store.strokes.length > 0;
 
-  // The playhead lives on the replay clock — scrubbing moves it and recording
-  // seeds/rests it there (see App). The one exception is while a stroke is being
-  // actively drawn: the store only commits between strokes, so poll the live
-  // clock each frame for a smooth head and a growing segment. The grace ring
-  // also needs per-frame updates, so keep polling for the whole live session.
-  const [liveState, setLiveState] = useState<{ head: number; grace: number; start: number | null } | null>(null);
-  useEffect(() => {
-    if (!live.isLive) { setLiveState(null); return; }
-    let raf = 0;
-    const loop = () => {
-      setLiveState({ head: live.now(), grace: live.graceFraction(), start: live.activeStart() });
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [live.isLive]);
+  // A recording session drives `elapsed` per frame, so everything below reads
+  // straight off the clock — no polling loop, and the playhead keeps scrolling
+  // through the grace period instead of freezing at the last stroke's end. The
+  // committed end (clock.duration) is the "tentative end" marker below.
+  const elapsed = clock.elapsed;
 
   // Actively drawing a stroke (vs. the idle grace period between strokes).
-  const drawing = liveState?.start != null;
-  const head = liveState?.head ?? 0;
+  const activeStart = clock.activeStart();
 
   // The stroke currently being drawn grows from its start to the live head.
-  const liveSpan: LiveSpan | null = drawing
-    ? { start: liveState!.start!, end: Math.max(liveState!.start!, head), lane: 0 }
+  const liveSpan: LiveSpan | null = activeStart !== null
+    ? { start: activeStart, end: Math.max(activeStart, elapsed), lane: 0 }
     : null;
   if (liveSpan) liveSpan.lane = firstFreeLane(layout.spans, liveSpan.start, liveSpan.end);
   const displayLanes = Math.max(layout.lanes, liveSpan ? liveSpan.lane + 1 : 0);
   const trackHeight = Math.max(44, RULER_H + BAND_PAD + displayLanes * LANE_H + BAND_PAD);
 
-  // While recording, the playhead is always the live clock (current time) so the
-  // timeline keeps scrolling through the grace period instead of freezing at the
-  // last stroke's end. The committed end (replay.duration) is surfaced separately
-  // as the "tentative end" marker below.
-  const elapsed = recording && liveState ? head : replay.elapsed;
-  const duration = Math.max(replay.duration, elapsed);
+  const duration = Math.max(clock.duration, elapsed);
   const playheadX = msToPx(elapsed);
   const contentWidth = Math.max(0, msToPx(duration)) + END_PAD;
 
@@ -183,13 +166,13 @@ export function Timeline() {
   // playhead, which can be scrubbed anywhere, including past this) — the marker
   // is purely the replay/export boundary. Always shown when there's content and
   // we're not live; while live, the playhead and grace ring convey current time.
-  const tentativeX = msToPx(replay.duration);
-  const showTentative = !recording && replay.duration > 0;
+  const tentativeX = msToPx(clock.duration);
+  const showTentative = !recording && clock.duration > 0;
 
   // The "played" highlight fills up to the playhead, but never past the content
   // end into empty trailing time — except while drawing, where content grows
   // with the playhead.
-  const playedX = drawing ? playheadX : Math.min(playheadX, tentativeX);
+  const playedX = activeStart !== null ? playheadX : Math.min(playheadX, tentativeX);
 
   function seekFromEvent(e: PointerEvent) {
     const content = trackRef.current?.querySelector('.timeline-content');
@@ -198,7 +181,7 @@ export function Timeline() {
     const ms = (e.clientX - rect.left) / PX_PER_MS;
     // Not clamped to the content end: the playhead can be parked past it (e.g. to
     // leave trailing time), and `duration` grows to follow so the track expands.
-    scrub(Math.max(0, ms));
+    seek(Math.max(0, ms));
   }
 
   function onPointerDown(e: PointerEvent) {
@@ -242,7 +225,7 @@ export function Timeline() {
   return (
     <div class={`timeline${recording ? ' is-live' : ''}`}>
       <div class="timeline-header">
-        <button id="btn-play" disabled={!canPlay} onClick={replay.toggle}>{isPlaying ? '⏸' : '▶'}</button>
+        <button id="btn-play" disabled={!canPlay} onClick={isPlaying ? clock.pause : clock.play}>{isPlaying ? '⏸' : '▶'}</button>
         <div class="timeline-readout">
           {formatTime(elapsed)} / {formatTime(duration)}
         </div>
@@ -268,10 +251,10 @@ export function Timeline() {
             </div>
           )}
           <div class="timeline-playhead" style={{ left: `${playheadX}px` }}>
-            {recording && liveState ? (
+            {recording ? (
               <svg class="timeline-grace" width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
                 <circle cx={RING_C} cy={RING_C} r={RING_R} fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="3" />
-                <path d={graceArc(liveState.grace)} fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
+                <path d={graceArc(clock.graceFraction())} fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
               </svg>
             ) : (
               <div class="timeline-playhead-handle" />

@@ -9,15 +9,15 @@ const FIELDS: EditField[] = ['x', 'y', 't'];
 // the canvas while not recording). x/y translate the whole stroke; t shifts it in
 // time, optionally dragging every later stroke along so the gaps after it hold.
 export function ActiveStrokeEditor() {
-  const { store, replay, live } = useApp();
+  const { store, clock } = useApp();
   const [propagate, setPropagate] = useState(false);
 
-  const active = live.isLive ? null : activeStrokeAt(store.strokes, replay.elapsed);
+  const active = clock.isRecording ? null : activeStrokeAt(store.strokes, clock.elapsed);
 
   if (active === null) {
     return (
       <div id="active-stroke-editor">
-        <div class="ase-empty">{live.isLive ? 'Recording…' : 'No stroke at playhead'}</div>
+        <div class="ase-empty">{clock.isRecording ? 'Recording…' : 'No stroke at playhead'}</div>
       </div>
     );
   }
@@ -28,7 +28,7 @@ export function ActiveStrokeEditor() {
     if (Number.isNaN(value)) return;
     store.editFirstPoint(active!, field, value, field === 't' && propagate);
     // Keep this stroke active at its new start so it stays selected and visible.
-    if (field === 't') replay.seek(Math.max(0, value), true);
+    if (field === 't') clock.seek(Math.max(0, value));
   }
 
   return (

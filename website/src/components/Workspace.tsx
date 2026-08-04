@@ -3,8 +3,7 @@ import { AppContext } from '../context';
 import type { DebugLayers, InkOptions, StrategiesState } from '../curves';
 import { DEBUG_DEFAULTS, getDefaultStrategies, INK_DEFAULTS } from '../curves';
 import { MAX_ZOOM, MIN_ZOOM, useCanvasView } from '../hooks/useCanvasView';
-import { LIVE_TIMEOUT, useLiveRecording } from '../hooks/useLiveRecording';
-import { useReplay } from '../hooks/useReplay';
+import { LIVE_TIMEOUT, usePlayhead } from '../hooks/usePlayhead';
 import { useStrokeStore } from '../strokeStore';
 import type { Config } from '../utils';
 import { DEFAULT_CONFIG, strokeEnd, strokeStart } from '../utils';
@@ -24,8 +23,7 @@ export function Workspace() {
   const store = useStrokeStore();
   const view = useCanvasView(store.strokes);
 
-  const replay = useReplay(store.strokes);
-  const live = useLiveRecording();
+  const clock = usePlayhead(store.strokes);
 
   const [strategies, setStrategies] = useState<StrategiesState>(getDefaultStrategies);
   const [debug, setDebug] = useState<DebugLayers>(DEBUG_DEFAULTS);
@@ -47,27 +45,24 @@ export function Workspace() {
 
   function handleClear() {
     if (!confirm('Clear all strokes?')) return;
-    replay.stop();
-    live.reset();
+    clock.seek(0);
     store.clear();
   }
 
-  // Undo, then move the playhead to where the undone stroke began rather than
-  // letting it follow to the new content end. Peeks the op about to be reversed;
-  // for a removed (drawn) stroke that's its start time. The seek lands at a time
-  // before the old duration, so useReplay's follow-to-end won't override it.
+  // Undo, then move the playhead to where the undone stroke began. Peeks the op
+  // about to be reversed; for a removed (drawn) stroke that's its start time.
   function handleUndo() {
     const op = store.canUndo ? store.history[store.historyIndex] : null;
     store.undo();
-    if (op && op.type === 'draw') replay.seek(strokeStart(op.stroke), true);
+    if (op && op.type === 'draw') clock.seek(strokeStart(op.stroke));
   }
   // Redo, restoring the playhead to where the redone draw left it: the stroke's
   // end plus the post-stroke grace gap, matching a fresh draw (rather than just
-  // the stroke's last node). Pinned so the follow-to-end doesn't reclaim it.
+  // the stroke's last node).
   function handleRedo() {
     const op = store.canRedo ? store.history[store.historyIndex + 1] : null;
     store.redo();
-    if (op && op.type === 'draw') replay.seek(strokeEnd(op.stroke) + LIVE_TIMEOUT, true);
+    if (op && op.type === 'draw') clock.seek(strokeEnd(op.stroke) + LIVE_TIMEOUT);
   }
   // The keydown listener is bound once, so route through refs to always call the
   // latest handlers (which close over the current history).
@@ -88,7 +83,7 @@ export function Workspace() {
 
   return (
     <AppContext.Provider value={{
-      store, view, replay, live,
+      store, view, clock,
       config, setConfig,
       inkOptions, setInkOptions,
       strategies, setStrategies,
@@ -111,7 +106,7 @@ export function Workspace() {
                 <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
               </svg>
             </button>
-            <button id="btn-clear" disabled={replay.isPlaying || !store.strokes.length} onClick={handleClear} title="Clear all strokes">
+            <button id="btn-clear" disabled={clock.isPlaying || !store.strokes.length} onClick={handleClear} title="Clear all strokes">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 6h18" />
                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />

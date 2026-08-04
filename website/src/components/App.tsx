@@ -1,15 +1,14 @@
 import { Component } from 'preact';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useApp } from '../context';
 import type { ActiveStrategy, DebugLayers, InkOptions } from '../curves';
 import { getActiveStrategies, INK_COLOR, inkDebug, renderInk, STRATEGY_DEFS } from '../curves';
 import { useStrokeCache } from '../hooks/useStrokeCache';
 import type { Stroke } from '../utils';
-import { activeStrokeAt, strokeEnd, strokeStart } from '../utils';
+import { activeStrokeAt, strokeEnd, withinStroke } from '../utils';
 import { CanvasBackground } from './CanvasBackground';
 import { drawLine } from './strokeRender';
 
-const PRESSURE_MAX = 8192;
 const INK_CHUNK = 128; // strokes per settled band
 
 type InkCache = ReturnType<typeof useStrokeCache>;
@@ -98,7 +97,7 @@ function OverlayStrategy({ def, param, strokes, drawTime, inkOptions, debug, cac
       {settled}
       <g>
         {strokes.map((s, i) =>
-          strokeStart(s) <= drawTime && strokeEnd(s) > drawTime
+          withinStroke(s, drawTime)
             ? (isDebug
               ? drawDebug(s, inkOptions, drawTime, i, debug)
               : drawLine(def.render(s, param, drawTime), i, def.color))
@@ -112,61 +111,34 @@ function OverlayStrategy({ def, param, strokes, drawTime, inkOptions, debug, cac
 // The drawing surface: records pointer input into strokes and renders the live
 // preview plus all committed strokes. Everything it touches comes from context.
 export function App() {
-  const { store, view, replay, live, inkOptions, setInkOptions, strategies, debug, config } = useApp();
+  const { store, view, clock, inkOptions, strategies, debug, config } = useApp();
 
   // In-progress stroke: `currentStrokeRef` is the authoritative builder (read on
   // commit); `livePoints` mirrors it for rendering through the active strategies.
   const currentStrokeRef = useRef<Stroke | null>(null);
-  const lastPointerTypeRef = useRef<string | null>(null);
   const drawLoopRef = useRef<number | null>(null);
   const [livePoints, setLivePoints] = useState<Stroke | null>(null);
 
   // Stop the draw loop if we unmount mid-stroke.
   useEffect(() => () => { if (drawLoopRef.current !== null) cancelAnimationFrame(drawLoopRef.current); }, []);
 
-  // When the grace period lapses and live mode ends, leave the playhead at the
-  // live end (current time, including the banked grace) instead of letting it
-  // snap back to the last stroke's end. The timeline then keeps showing both the
-  // current time (playhead) and the tentative replay/export end (marker), and the
-  // next stroke resumes from here — preserving the inter-stroke gap. This runs in
-  // a layout effect so the seek lands before paint: otherwise the render where
-  // `isLive` just flipped false paints the playhead back at the committed end for
-  // one frame (a visible snap) before the seek catches it up.
-  const wasLiveRef = useRef(false);
-  useLayoutEffect(() => {
-    if (wasLiveRef.current && !live.isLive) replay.seek(live.now());
-    wasLiveRef.current = live.isLive;
-  }, [live.isLive]);
-
   // --- Pointer / drawing ---
 
   function handlePointerDown(e: PointerEvent) {
     // Middle-button drag is the pan gesture, handled by useCanvasView.
-    if (e.button !== 0 || replay.isPlaying) return;
+    if (e.button !== 0 || clock.isPlaying) return;
 
     view.svgRef.current!.setPointerCapture(e.pointerId);
 
-    // Detect the input device and, when it changes, switch how pressure is
-    // sourced: pens report real pressure; mouse/touch don't, so simulate it from
-    // stroke timings (pressureFromTime). Only react to a *change* so a manual
-    // toggle of the option still sticks while the same device is in use.
-    if (e.pointerType !== lastPointerTypeRef.current) {
-      lastPointerTypeRef.current = e.pointerType;
-      const fromTime = e.pointerType !== 'pen';
-      if (fromTime !== inkOptions.pressureFromTime) setInkOptions({ ...inkOptions, pressureFromTime: fromTime });
-    }
-
-    // A fresh recording session records from the playhead, so seed the live
-    // clock to it; continuing within a session (during grace) keeps the clock.
-    // After a long pause the playhead already sits at the live end (see the
-    // live-end effect below), so this seed carries the capped grace as the gap
-    // before the new stroke.
-    if (!live.isLive) live.reset(replay.elapsed);
-    replay.seek(replay.elapsed); // leave replay-clip mode so the canvas shows fully
+    // Records from wherever the playhead sits. Starting a stroke during the grace
+    // period continues the running clock, so the gap is real; after the idle cap
+    // fired the playhead is already parked at the capped end, which becomes the
+    // gap before this stroke.
+    clock.startRecording();
 
     const pt = view.svgToContent(e.clientX, e.clientY);
-    live.strokeStarted();
-    currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: live.now(), p: Math.round(e.pressure * PRESSURE_MAX) }];
+    clock.penDown();
+    currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: clock.now() }];
     drawFrame(); // renders the live stroke + starts the dwell loop
   }
 
@@ -177,17 +149,24 @@ export function App() {
     const rec = currentStrokeRef.current;
     if (rec === null) { drawLoopRef.current = null; return; }
     const last = rec[rec.length - 1];
-    setLivePoints([...rec, { x: last.x, y: last.y, t: live.now(), p: last.p }]);
+    setLivePoints([...rec, { x: last.x, y: last.y, t: clock.now() }]);
     drawLoopRef.current = requestAnimationFrame(drawFrame);
   }
 
   function handlePointerMove(e: PointerEvent) {
-    if (currentStrokeRef.current === null) return;
+    const rec = currentStrokeRef.current;
+    if (rec === null) return;
 
     const pt = view.svgToContent(e.clientX, e.clientY);
+    const t = clock.now();
 
-    // Record distinct positions only; the draw loop handles rendering + dwell.
-    currentStrokeRef.current.push({ x: pt.x, y: pt.y, t: live.now(), p: Math.round(e.pressure * PRESSURE_MAX) });
+    // Freeze the pen's dwell at the previous position before recording the new
+    // one. This is what makes time belong to the gap between two samples rather
+    // than to a sample itself, so the renderer reads a node's dwell straight off
+    // the next node's timestamp. It commits what the draw-loop tip only rendered.
+    const last = rec[rec.length - 1];
+    rec.push({ x: last.x, y: last.y, t });
+    rec.push({ x: pt.x, y: pt.y, t });
   }
 
   function commitStroke() {
@@ -197,13 +176,13 @@ export function App() {
     // Capture the pointer-up point (final position + release time) so every
     // stroke has >= 2 points and the end dwell is recorded.
     const last = rec[rec.length - 1];
-    const endT = live.now();
-    const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: endT, p: 0 }];
+    const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: clock.now() }];
     currentStrokeRef.current = null;
     setLivePoints(null);
     store.draw(stroke);
-    replay.seek(endT); // rest the playhead at the end of the just-drawn stroke
-    live.strokeEnded();
+    // The playhead keeps running through the grace period, so the gap before the
+    // next stroke is real time; the idle cap parks it if the grace runs out.
+    clock.penUp();
   }
 
   // --- Derived render data ---
@@ -214,13 +193,12 @@ export function App() {
 
   // The stroke under the playhead — highlighted while reviewing (not recording)
   // so it's clear which stroke the current time belongs to.
-  const activeStroke = live.isLive ? null : activeStrokeAt(strokes, replay.elapsed);
+  const activeStroke = clock.isRecording ? null : activeStrokeAt(strokes, clock.elapsed);
 
-  // Renderers draw each stroke "as of" this time; the playhead during replay,
-  // otherwise fully drawn. Only clip when the playhead is genuinely mid-timeline:
-  // at/past the end means "fully drawn", which also avoids a one-frame clip of a
-  // freshly drawn stroke (elapsed/duration update a render later, via an effect).
-  const drawTime = replay.isReplaying && replay.elapsed < replay.duration ? replay.elapsed : Infinity;
+  // Renderers draw each stroke "as of" the playhead — the canvas is a viewport
+  // onto time, so nothing later than this is visible. `elapsed` is live in every
+  // mode (the replay and recording loops both drive it), so no clock read here.
+  const drawTime = clock.elapsed;
 
   // Ink is the always-on base layer; reference curves draw on top. Geometry is
   // cached per stroke (keyed by identity) so it's computed once, not per frame.
@@ -244,7 +222,7 @@ export function App() {
   const activeInk = (
     <g>
       {strokes.map((s, i) =>
-        strokeStart(s) <= drawTime && strokeEnd(s) > drawTime
+        withinStroke(s, drawTime)
           ? drawLine(renderInk(s, inkOptions, drawTime), i, INK_COLOR)
           : null,
       )}
@@ -261,7 +239,7 @@ export function App() {
     <svg
       ref={view.svgRef}
       id="canvas-svg"
-      class={live.isLive ? 'live' : ''}
+      class={clock.isRecording ? 'live' : ''}
       onPointerDown={handlePointerDown as any}
       onPointerMove={handlePointerMove as any}
       onPointerUp={commitStroke}

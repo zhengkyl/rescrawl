@@ -4,16 +4,15 @@ import { getDefaultStrategies } from '../curves';
 import { deserialize } from '../utils';
 
 export function Controls() {
-  const { config, setConfig, store, replay, live, setStrategies, setExportOpen, setSettingsOpen } = useApp();
+  const { config, setConfig, store, clock, setStrategies, setExportOpen, setSettingsOpen } = useApp();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasStrokes = store.strokes.length > 0;
 
   async function handleImport(file: File) {
     const text = await file.text();
-    replay.stop();
     const imported = deserialize(text);
     const lastT = imported.reduce((m, st) => st.reduce((mm, pt) => Math.max(mm, pt.t), m), 0);
-    live.reset(lastT); // continue the live clock from the imported end
+    clock.seek(lastT); // park at the imported end so recording continues from there
     setStrategies(getDefaultStrategies());
     store.replaceAll(imported);
   }
