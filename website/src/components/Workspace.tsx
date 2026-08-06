@@ -3,7 +3,7 @@ import { useEffect, useState } from 'preact/hooks';
 import { AppContext } from '../context';
 import type { DebugLayers, InkOptions, StrategiesState } from '../curves';
 import { DEBUG_DEFAULTS, getDefaultStrategies, INK_DEFAULTS } from '../curves';
-import { MAX_ZOOM, MIN_ZOOM, useCanvasView } from '../hooks/useCanvasView';
+import { useCanvasView } from '../hooks/useCanvasView';
 import { usePlayhead } from '../hooks/usePlayhead';
 import { applyStrokeOp, useStrokes } from '../strokeStore';
 import type { Config } from '../utils';
@@ -15,6 +15,8 @@ import { ExportDialog } from './ExportDialog';
 import { InkPanel } from './InkPanel';
 import { SettingsDialog } from './SettingsDialog';
 import { Timeline } from './Timeline';
+import { Toolbar } from './Toolbar';
+import { ZoomControl } from './ZoomControl';
 
 export function Workspace() {
   const store = useStrokes();
@@ -91,50 +93,12 @@ export function Workspace() {
     }}>
       <div id="main-area">
         <div id="canvas-wrapper">
-          <div id="floating-toolbar">
-            <button id="btn-undo" disabled={store.historyIndex.value < 0} onClick={undo} title="Undo (Ctrl+Z)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 14 4 9l5-5" />
-                <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
-              </svg>
-            </button>
-            <button id="btn-redo" disabled={store.historyIndex.value >= store.historyStack.value.length - 1} onClick={redo} title="Redo (Ctrl+Y)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m15 14 5-5-5-5" />
-                <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
-              </svg>
-            </button>
-            <button id="btn-clear" disabled={clock.isPlaying || !store.strokes.value.length} onClick={clear} title="Clear all strokes">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 6h18" />
-                <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
-              </svg>
-            </button>
-            <button id="btn-reset-view" onClick={view.fitToView} title="Reset view">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M9 9h6v6H9z" />
-              </svg>
-            </button>
-          </div>
+          <Toolbar
+            onUndo={undo} onRedo={redo} onClear={clear} />
           <div id="canvas-area">
             <App />
           </div>
-          <div id="zoom-control">
-            <input
-              type="range"
-              min={Math.log(MIN_ZOOM)}
-              max={Math.log(MAX_ZOOM)}
-              step="any"
-              value={Math.log(view.zoom.value)}
-              onInput={(e) => view.zoomTo(Math.exp(+(e.currentTarget as HTMLInputElement).value))}
-              title="Zoom (Ctrl+scroll)"
-            />
-            <span class="zoom-level" title="Reset to 100%" onClick={() => view.zoomTo(1)}>
-              {Math.round(view.zoom.value * 100)}%
-            </span>
-          </div>
+          <ZoomControl />
         </div>
         <div id="bottom-bar">
           <Timeline />
