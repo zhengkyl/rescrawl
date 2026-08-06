@@ -1,12 +1,14 @@
 import { useRef } from 'preact/hooks';
 import { useApp } from '../context';
 import { getDefaultStrategies } from '../curves';
+import { useStrokes } from '../strokeStore';
 import { deserialize } from '../utils';
 
 export function Controls() {
-  const { config, setConfig, store, clock, setStrategies, setExportOpen, setSettingsOpen } = useApp();
+  const { config, setConfig, clock, setStrategies, setExportOpen, setSettingsOpen } = useApp();
+  const store = useStrokes();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const hasStrokes = store.strokes.length > 0;
+  const hasStrokes = store.strokes.value.length > 0;
 
   async function handleImport(file: File) {
     const text = await file.text();
@@ -14,7 +16,7 @@ export function Controls() {
     const lastT = imported.reduce((m, st) => st.reduce((mm, pt) => Math.max(mm, pt.t), m), 0);
     clock.seek(lastT); // park at the imported end so recording continues from there
     setStrategies(getDefaultStrategies());
-    store.replaceAll(imported);
+    store.replace(imported);
   }
 
   return (

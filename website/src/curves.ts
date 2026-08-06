@@ -109,27 +109,13 @@ export const INK_COLOR = '#1a1a1a';
 export type InkOptions = Required<RenderOptions>;
 export const INK_DEFAULTS: InkOptions = { ...RENDER_DEFAULTS };
 
-// Whether the whole stroke is a standalone tap (barely any travel) rather than a
-// stroke that merely begins at one point before moving. Only a real tap gets the
-// dot's visible floor; a lone-node prefix of a longer stroke stays at its plain
-// width so it grows seamlessly instead of shrinking once more points arrive.
-function isTapStroke(stroke: Stroke): boolean {
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (const p of stroke) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-  }
-  return maxX - minX <= 1 && maxY - minY <= 1;
-}
-
-// Draw the ink as of time `t` (Infinity = fully drawn). `live` marks the
-// in-progress stroke, whose lone-node frames must not snap to the dot floor.
-export function renderInk(stroke: Stroke, options: InkOptions, t: number, live = false): RenderedLine {
+// Draw the ink as of time `t` (Infinity = fully drawn). A tap needs no special
+// case: it covers no distance, so its speed is zero and it pools to a dot whose
+// size follows how long it was held.
+export function renderInk(stroke: Stroke, options: InkOptions, t: number): RenderedLine {
   const pts = drawnPoints(stroke, t);
   if (!pts.length) return { curve: '', width: options.maxWidth };
-  return renderStroke(pts, options, !live && isTapStroke(stroke));
+  return renderStroke(pts, options);
 }
 
 // Debug geometry (centerline + outline points + raw recorded dots) as of `t`.
@@ -144,9 +130,9 @@ export type InkControl = { key: NumericInkKey; label: string; min: number; max: 
 export const INK_CONTROLS: InkControl[] = [
   { key: 'minWidth', label: 'min width', min: 0, max: 20, step: 0.5 },
   { key: 'maxWidth', label: 'max width', min: 1, max: 40, step: 0.5 },
-  { key: 'dwellFull', label: 'dwell full (ms)', min: 2, max: 400, step: 1 },
-  { key: 'smoothWidth', label: 'smooth width', min: 0, max: 12, step: 1 },
-  { key: 'smooth', label: 'smooth', min: 0, max: 1, step: 0.05 },
+  { key: 'thinSpeed', label: 'thin speed (px/ms)', min: 0.05, max: 4, step: 0.05 },
+  { key: 'widthLag', label: 'width lag (ms)', min: 2, max: 300, step: 1 },
+  { key: 'widthSpan', label: 'width span (px)', min: 2, max: 200, step: 1 },
   { key: 'simplify', label: 'simplify (px)', min: 0, max: 4, step: 0.05 },
 ];
 

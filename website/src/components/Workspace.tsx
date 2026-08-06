@@ -1,29 +1,25 @@
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { batch } from '@preact/signals';
+import { useEffect, useState } from 'preact/hooks';
 import { AppContext } from '../context';
 import type { DebugLayers, InkOptions, StrategiesState } from '../curves';
 import { DEBUG_DEFAULTS, getDefaultStrategies, INK_DEFAULTS } from '../curves';
 import { MAX_ZOOM, MIN_ZOOM, useCanvasView } from '../hooks/useCanvasView';
-import { LIVE_TIMEOUT, usePlayhead } from '../hooks/usePlayhead';
-import { useStrokeStore } from '../strokeStore';
+import { usePlayhead } from '../hooks/usePlayhead';
+import { applyStrokeOp, useStrokes } from '../strokeStore';
 import type { Config } from '../utils';
-import { DEFAULT_CONFIG, strokeEnd, strokeStart } from '../utils';
-import { ActiveStrokeEditor } from './ActiveStrokeEditor';
+import { DEFAULT_CONFIG } from '../utils';
 import { App } from './App';
-import { BottomBar } from './BottomBar';
 import { Controls } from './Controls';
 import { CurvePanel } from './CurvePanel';
 import { ExportDialog } from './ExportDialog';
 import { InkPanel } from './InkPanel';
 import { SettingsDialog } from './SettingsDialog';
+import { Timeline } from './Timeline';
 
-// Owns all shared app state and the surrounding chrome (toolbar, panels, bottom
-// bar, dialogs). The drawing surface itself is <App>, mounted in the canvas slot
-// and fed entirely through context.
 export function Workspace() {
-  const store = useStrokeStore();
-  const view = useCanvasView(store.strokes);
-
-  const clock = usePlayhead(store.strokes);
+  const store = useStrokes();
+  const clock = usePlayhead();
+  const view = useCanvasView();
 
   const [strategies, setStrategies] = useState<StrategiesState>(getDefaultStrategies);
   const [debug, setDebug] = useState<DebugLayers>(DEBUG_DEFAULTS);
@@ -43,39 +39,41 @@ export function Workspace() {
   useEffect(() => { localStorage.setItem('rescrawl-config', JSON.stringify(config)); }, [config]);
   useEffect(() => { document.body.classList.toggle('panel-left', !config.sidebarRight); }, [config.sidebarRight]);
 
-  function handleClear() {
+  function undo() {
+    if (store.historyIndex.value < 0) return;
+    const entry = store.historyStack.value[store.historyIndex.value];
+    batch(() => {
+      store.strokes.value = applyStrokeOp(store.strokes.value, entry.op, "undo");
+      store.historyIndex.value--;
+    });
+    clock.seek(entry.prevFocus)
+  }
+  function redo() {
+    if (store.historyIndex.value >= store.historyStack.value.length - 1) return;
+    const entry = store.historyStack.value[store.historyIndex.value + 1];
+    batch(() => {
+      store.strokes.value = applyStrokeOp(store.strokes.value, entry.op, "redo");
+      store.historyIndex.value++;
+    });
+    clock.seek(entry.nextFocus);
+  }
+  function clear() {
     if (!confirm('Clear all strokes?')) return;
     clock.seek(0);
-    store.clear();
+    store.replace([]);
   }
 
-  // Undo, then move the playhead to where the undone stroke began. Peeks the op
-  // about to be reversed; for a removed (drawn) stroke that's its start time.
-  function handleUndo() {
-    const op = store.canUndo ? store.history[store.historyIndex] : null;
-    store.undo();
-    if (op && op.type === 'draw') clock.seek(strokeStart(op.stroke));
-  }
-  // Redo, restoring the playhead to where the redone draw left it: the stroke's
-  // end plus the post-stroke grace gap, matching a fresh draw (rather than just
-  // the stroke's last node).
-  function handleRedo() {
-    const op = store.canRedo ? store.history[store.historyIndex + 1] : null;
-    store.redo();
-    if (op && op.type === 'draw') clock.seek(strokeEnd(op.stroke) + LIVE_TIMEOUT);
-  }
-  // The keydown listener is bound once, so route through refs to always call the
-  // latest handlers (which close over the current history).
-  const undoRef = useRef(handleUndo);
-  undoRef.current = handleUndo;
-  const redoRef = useRef(handleRedo);
-  redoRef.current = handleRedo;
 
-  // Undo/redo shortcuts.
+  // Undo/redo shortcuts. The listener is bound once and that's fine: the store is
+  // read at call time, and `clock.seek` only touches refs, signals, and a stable
+  // setState — so there is no stale render scope to close over.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && !e.shiftKey && e.key === 'z') { e.preventDefault(); undoRef.current(); }
-      else if (e.ctrlKey && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) { e.preventDefault(); redoRef.current(); }
+      if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
+        e.preventDefault(); undo();
+      } else if (e.ctrlKey && (e.key === 'y' || (e.shiftKey && e.key === 'Z'))) {
+        e.preventDefault(); redo();
+      }
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -83,7 +81,7 @@ export function Workspace() {
 
   return (
     <AppContext.Provider value={{
-      store, view, clock,
+      view, clock,
       config, setConfig,
       inkOptions, setInkOptions,
       strategies, setStrategies,
@@ -94,19 +92,19 @@ export function Workspace() {
       <div id="main-area">
         <div id="canvas-wrapper">
           <div id="floating-toolbar">
-            <button id="btn-undo" disabled={!store.canUndo} onClick={handleUndo} title="Undo (Ctrl+Z)">
+            <button id="btn-undo" disabled={store.historyIndex.value < 0} onClick={undo} title="Undo (Ctrl+Z)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 14 4 9l5-5" />
                 <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
               </svg>
             </button>
-            <button id="btn-redo" disabled={!store.canRedo} onClick={handleRedo} title="Redo (Ctrl+Y)">
+            <button id="btn-redo" disabled={store.historyIndex.value >= store.historyStack.value.length - 1} onClick={redo} title="Redo (Ctrl+Y)">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m15 14 5-5-5-5" />
                 <path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />
               </svg>
             </button>
-            <button id="btn-clear" disabled={clock.isPlaying || !store.strokes.length} onClick={handleClear} title="Clear all strokes">
+            <button id="btn-clear" disabled={clock.isPlaying || !store.strokes.value.length} onClick={clear} title="Clear all strokes">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 6h18" />
                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
@@ -129,16 +127,18 @@ export function Workspace() {
               min={Math.log(MIN_ZOOM)}
               max={Math.log(MAX_ZOOM)}
               step="any"
-              value={Math.log(view.zoom)}
+              value={Math.log(view.zoom.value)}
               onInput={(e) => view.zoomTo(Math.exp(+(e.currentTarget as HTMLInputElement).value))}
               title="Zoom (Ctrl+scroll)"
             />
             <span class="zoom-level" title="Reset to 100%" onClick={() => view.zoomTo(1)}>
-              {Math.round(view.zoom * 100)}%
+              {Math.round(view.zoom.value * 100)}%
             </span>
           </div>
         </div>
-        <BottomBar />
+        <div id="bottom-bar">
+          <Timeline />
+        </div>
       </div>
       <div id="panel">
         <Controls />
@@ -146,7 +146,6 @@ export function Workspace() {
           <CurvePanel />
           <InkPanel />
         </div>
-        <ActiveStrokeEditor />
       </div>
       {exportOpen && <ExportDialog />}
       <SettingsDialog />

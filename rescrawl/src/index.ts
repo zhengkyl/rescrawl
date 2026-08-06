@@ -1,422 +1,408 @@
-// rescrawl — turn a single recorded stroke into renderable ink geometry:
-// a cubic centerline plus a variable-width outline (the filled shape).
+// rescrawl — turn a single recorded stroke into renderable ink geometry: one
+// closed outline (the filled shape), plus its centerline for reference.
 //
-// Width is driven purely by timing, mapped to a half-width between `minWidth`
-// and `maxWidth`. No device pressure is used, so every input (pen, mouse, plain
-// touch) produces the same expressive ink.
+// Width comes from speed alone. The slower the pen was moving into a sample, the
+// wider the ink; a pen that barely moved is widest. A pause is therefore not a
+// special case with its own rule — it is simply the limit of "slow", so ink
+// pools where the pen lingered and thins where it swept.
 //
-// A recorded stroke freezes the pen's dwell before it moves on: every new
-// position is preceded by a coincident sample stamped with the same time. So
-// time is only ever spent BETWEEN two samples, never at one, and each node needs
-// a single number — `dt`, how long the pen lingered there before reaching the
-// next distinct position (for the last node, before the pen lifted). Long dt
-// means the pen dawdled or held still, so the ink is thick; short dt means it
-// swept through, so the ink is thin. `dwellFull` is the dt that reaches maxWidth.
+// The pipeline consumes time first and never looks at it again:
+//
+//   samples (x,y,t) → widths → points (x,y,half) → simplify → outline → path
+//
+// Stage 1 turns timing into a half-width per sample. Stage 2 resolves runs of
+// coincident samples — which carry a width change but no shape — into real
+// geometry. After that, no stage knows what time is.
 //
 // Stability: the renderer is called fresh with a growing prefix (live drawing,
-// replay scrubbing). Earlier geometry never moves or shrinks — the centerline
-// clamps its last control point (only the final segment is live) and each gap
-// freezes once the next point exists.
+// replay scrubbing). The width filter is causal and simplification is greedy
+// from the start, so only the trailing run can still change.
 
 export type StrokePoint = { x: number; y: number; t: number };
 export type Stroke = StrokePoint[];
 
 export type RenderOptions = {
-  minWidth?: number; // thinnest stroke width (fast motion, no dwell)
-  maxWidth?: number; // thickest stroke width (slow motion or a long dwell)
-  dwellFull?: number; // ms lingering at a point to reach full width
-  smoothWidth?: number; // moving-average passes over the (noisy) per-point width
-  smooth?: number; // centerline spline smoothing, 0..1
-  simplify?: number; // px: collapse near-collinear runs within this tolerance (0 = off)
+  minWidth?: number; // width when moving at or above `thinSpeed`
+  maxWidth?: number; // width at a standstill
+  thinSpeed?: number; // px/ms at which the stroke reaches minWidth
+  widthLag?: number; // ms of elapsed time for the width to catch up
+  widthSpan?: number; // px of travel for the width to catch up
+  simplify?: number; // px: drop points within this of the chord (0 = off)
 };
 
 export type StrokeRender = {
   curve: string; // centerline path `d`
-  shapes: string[]; // variable-width outline parts in draw order
+  shapes: string[]; // the filled outline
   width: number; // max full width
 };
 
 export const RENDER_DEFAULTS: Required<RenderOptions> = {
   minWidth: 1.5,
   maxWidth: 8,
-  dwellFull: 25,
-  smoothWidth: 4,
-  smooth: 1,
+  thinSpeed: 1,
+  widthLag: 80,
+  widthSpan: 30,
   simplify: 0.75,
 };
 
-const COINCIDENT_EPS = 0.5; // px — points closer than this are the same position
-const DOT_TAP_MS = 250; // a standalone tap held this briefly is just a dot, not a "hold to grow"
+const COINCIDENT_EPS = 0.5; // px — closer than this counts as the same position
+const MAX_SLOPE = 0.5; // cap on d(half)/ds where a pool steps up from a thin approach
+const CORNER_STEPS = 13; // fan segments used to round a turn past 90°
+const CAP_STEPS = 16; // segments in each end cap
 
 // --- small helpers ---
 
 const r = (n: number) => Math.round(n * 100) / 100;
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp01 = (n: number) => (n < 0 ? 0 : n > 1 ? 1 : n);
+
 type Vec = { x: number; y: number };
 
-// A node is a distinct pen position. Runs of coincident samples collapse into
-// one node; `t` is when the pen arrived and `dt` how long it lingered before
-// reaching the next distinct position — or, for the last node, before it lifted.
-type Node = { x: number; y: number; t: number; dt: number };
+// A resolved point: a position and the half-width of the ink there. Time has
+// already been folded into `half` by the time one of these exists.
+type Pt = { x: number; y: number; half: number };
 
-function collapse(stroke: Stroke): Node[] {
-  const nodes: Node[] = [];
-  for (const pt of stroke) {
-    const last = nodes[nodes.length - 1];
-    if (
-      last &&
-      Math.abs(last.x - pt.x) < COINCIDENT_EPS &&
-      Math.abs(last.y - pt.y) < COINCIDENT_EPS
-    )
-      continue;
-    nodes.push({ x: pt.x, y: pt.y, t: pt.t, dt: 0 });
-  }
-  // Time is spent between samples, never at one: a node holds until the next
-  // distinct position appears, and the last until the stroke's final sample.
-  const end = stroke.length ? stroke[stroke.length - 1].t : 0;
-  for (let i = 0; i < nodes.length; i++) {
-    const until = i + 1 < nodes.length ? nodes[i + 1].t : end;
-    nodes[i].dt = Math.max(0, until - nodes[i].t);
-  }
-  return nodes;
+const dist = (a: Vec, b: Vec) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function rotate(p: Vec, c: Vec, a: number): Vec {
+  const s = Math.sin(a),
+    k = Math.cos(a);
+  const dx = p.x - c.x,
+    dy = p.y - c.y;
+  return { x: dx * k - dy * s + c.x, y: dx * s + dy * k + c.y };
 }
 
-// --- decimate near-collinear runs (slow drawing records far more points than
-// the shape needs) ---
+// --- stage 1: timing → width ---
 //
-// Parameterize each run by time — the one axis that always increases — and drop
-// a point when its x AND y both stay within `eps` of the straight chord
-// interpolated by time between the run's endpoints. Matching the time-chord (not
-// just a spatial line) means the run held a constant heading AND a constant
-// speed, so collapsing it to its two endpoints changes neither the shape nor the
-// width. Widths are precomputed at full resolution and carried on the kept
-// nodes, so a fast thin line and a slow thick line both survive the collapse.
+// The target width is set by the speed into each sample: `thinSpeed` or faster
+// is minWidth, a standstill is maxWidth. A first-order filter chases that target
+// so width can never jump between neighbours, which is what removes the need for
+// a separate smoothing pass over the width series.
 //
-// Greedy from the start: every run but the trailing one is frozen as the stroke
-// grows, matching the renderer's "only the final segment is live" guarantee.
-// Core test: greedily walk the points, returning the indices to keep. A run from
-// `a` collapses to its endpoints while every interior point stays within `eps` of
-// the time-chord (see above). Shared by the renderer (on collapsed nodes) and the
-// public `simplifyStroke` (on raw points), so both reduce identically.
-function collinearKeep(pts: { x: number; y: number; t: number }[], eps: number): number[] {
+// The filter's gain advances with ELAPSED TIME. That is the load-bearing choice:
+// a library without timestamps has to make the gain proportional to distance
+// instead, and a distance gain is exactly zero while the pen is stationary — it
+// would freeze the width at the moment you stop, precisely where we want it to
+// keep pooling. A zero-length segment carries no time either, so it is skipped
+// rather than treated as infinitely fast.
+function halfWidths(stroke: Stroke, o: Required<RenderOptions>): number[] {
+  const lo = o.minWidth / 2,
+    hi = o.maxWidth / 2;
+  const half = [lo];
+  let p = 0; // 0 = thinnest, 1 = thickest
+  for (let i = 1; i < stroke.length; i++) {
+    const dt = stroke[i].t - stroke[i - 1].t;
+    if (dt > 0) {
+      const ds = dist(stroke[i], stroke[i - 1]);
+      const target = clamp01(1 - ds / dt / o.thinSpeed);
+      // 1 - e^(-x) is the exact discretisation of a first-order filter, so the
+      // result depends only on how far the filter advanced and not on how the
+      // samples happened to be spaced. (A bare x would do the same for small
+      // steps but has to clamp at 1, which would make every pause longer than
+      // `widthLag` land on maxWidth — a flicked tap and a deliberate hold would
+      // render identically.)
+      //
+      // The filter advances with elapsed time AND with distance travelled,
+      // whichever gets there first. Time alone lets a pause pool the ink, but
+      // leaves the pooled width trailing through the flick that follows, because
+      // a fast stroke covers a lot of ground in very little time. Distance alone
+      // — all a library without timestamps can use — freezes while the pen is
+      // stationary, exactly where pooling needs to happen. Ink needs both.
+      p += (target - p) * (1 - Math.exp(-(dt / o.widthLag + ds / o.widthSpan)));
+    }
+    half.push(lerp(lo, hi, p));
+  }
+  return half;
+}
+
+// --- stage 2: pooled width → geometry ---
+//
+// A pause records several samples at one position (the draw loop's per-frame tip
+// while live, the pen-up sample once committed). They carry a width change but
+// no shape, and a zero-length segment has no direction to offset perpendicular
+// to. The same thing happens without exact coincidence — a pen that pauses,
+// jitters a pixel and moves on climbs several px of width across one px of path.
+//
+// So collapse each coincident run to the width it *leaves* with, and before
+// emitting any point whose width climbs faster than MAX_SLOPE, insert a holding
+// point upstream at the approach width.
+//
+// KNOWN BROKEN: the guard implies rise/MAX_SLOPE > ds, so the min() below always
+// picks ds * 0.9 — the slope term is unreachable and the ramp only ever shortens
+// the transition by 10%. Left as-is pending a decision on what replaces it.
+function resolve(stroke: Stroke, half: number[]): Pt[] {
+  const pts: Pt[] = [];
+
+  function push(x: number, y: number, h: number) {
+    const prev = pts[pts.length - 1];
+    if (prev) {
+      const ds = dist({ x, y }, prev);
+      const rise = h - prev.half;
+      if (ds > 0 && rise > ds * MAX_SLOPE) {
+        const back = Math.min(rise / MAX_SLOPE, ds * 0.9);
+        pts.push({
+          x: x - ((x - prev.x) / ds) * back,
+          y: y - ((y - prev.y) / ds) * back,
+          half: prev.half,
+        });
+      }
+    }
+    pts.push({ x, y, half: h });
+  }
+
+  let i = 0;
+  while (i < stroke.length) {
+    const at = stroke[i];
+    let j = i;
+    while (
+      j + 1 < stroke.length &&
+      Math.abs(stroke[j + 1].x - at.x) < COINCIDENT_EPS &&
+      Math.abs(stroke[j + 1].y - at.y) < COINCIDENT_EPS
+    )
+      j++;
+    push(at.x, at.y, half[j]);
+    i = j + 1;
+  }
+  return pts;
+}
+
+// --- stage 3: decimate ---
+//
+// Greedy walk from an anchor, extending while every interior point stays within
+// `eps` of the chord — in position AND in width, parameterized by arc length.
+// Testing width too means a point carrying a width change survives even where
+// the path is straight, which is what keeps the pool geometry above from being
+// decimated away as "collinear".
+//
+// Greedy from the start rather than a global split (Douglas–Peucker): a global
+// rule re-picks its split points as the stroke grows, so already-drawn geometry
+// would shift.
+//
+// The last point is never used as a chord endpoint. While the pen is down it is
+// the only point whose width is still moving — a pause keeps widening it every
+// frame — and a chord anchored there re-interpolates every point dropped behind
+// it, on every frame. That is what made a pause visibly re-thin the stroke it
+// grew out of: the run behind the pen stayed collapsed while the chord to the
+// swelling endpoint smeared the pool backwards over it, until the deviation
+// finally crossed `eps` and the true, thinner widths snapped back. Excluding it
+// costs one extra kept point and makes everything behind the pen immutable.
+function decimate(pts: Pt[], eps: number): Pt[] {
   const n = pts.length;
-  if (n <= 2 || eps <= 0) return pts.map((_, i) => i);
-  const keep = [0];
+  if (n <= 2 || eps <= 0) return pts;
+
+  const cum = [0];
+  for (let i = 1; i < n; i++) cum.push(cum[i - 1] + dist(pts[i], pts[i - 1]));
+
+  // Does every interior point of [a..end] sit within `eps` of the chord?
+  function fits(a: number, k: number, end: number): boolean {
+    const span = cum[end] - cum[a];
+    if (span <= 0) return false;
+    for (let j = a + 1; j <= k; j++) {
+      const s = (cum[j] - cum[a]) / span;
+      if (
+        Math.abs(pts[j].x - lerp(pts[a].x, pts[end].x, s)) > eps ||
+        Math.abs(pts[j].y - lerp(pts[a].y, pts[end].y, s)) > eps ||
+        Math.abs(pts[j].half - lerp(pts[a].half, pts[end].half, s)) > eps
+      )
+        return false;
+    }
+    return true;
+  }
+
+  const out = [pts[0]];
   let a = 0;
   while (a < n - 1) {
-    let k = a + 1; // furthest endpoint whose run stays within tolerance
-    while (k < n - 1) {
-      const end = k + 1,
-        dt = pts[end].t - pts[a].t;
-      let collinear = dt > 0;
-      for (let j = a + 1; collinear && j <= k; j++) {
-        const s = (pts[j].t - pts[a].t) / dt;
-        collinear =
-          Math.abs(pts[j].x - lerp(pts[a].x, pts[end].x, s)) <= eps &&
-          Math.abs(pts[j].y - lerp(pts[a].y, pts[end].y, s)) <= eps;
-      }
-      if (!collinear) break;
-      k = end;
-    }
-    keep.push(k);
+    // `k < n - 2` stops the run one short, so `end` never reaches the last point.
+    let k = a + 1;
+    while (k < n - 2 && fits(a, k, k + 1)) k++;
+    out.push(pts[k]);
     a = k;
   }
-  return keep;
+  return out;
 }
 
-// --- centerline (cardinal spline → cubic bezier) ---
+// --- stage 4: outline ---
 //
-// A cardinal spline through `pts`, emitted as chained cubic beziers (no leading
-// `M`). Each interior control point pulls toward the chord of its neighbours,
-// scaled by `smooth` (0 = straight polyline, 1 = Catmull-Rom). Endpoints clamp
-// to themselves, so the first/last segment is frozen as soon as it exists.
-function splineSegments(pts: Vec[], smooth: number): string {
+// Walk the points offsetting perpendicular to the direction of travel, collecting
+// a left and a right edge, then join them into one closed loop with a cap at each
+// end. The offset direction blends the incoming and outgoing headings by how
+// aligned they are, so straight runs use the plain perpendicular and bends ease
+// between the two.
+//
+// Nothing rotates the contact point along the tangent, so a steep width change
+// cannot fold the edge back over itself — which is why there is no pass here to
+// drop circles contained inside their neighbours.
+//
+// Where the path turns past 90° the two offset edges would cross, so instead of
+// an offset pair we sweep a fan of points around that point: a real round join
+// inside the same contour, rather than a disc patched over the seam afterwards.
+function outlinePoints(pts: Pt[]): Vec[] {
   const n = pts.length;
-  let d = "";
-  for (let i = 0; i < n - 1; i++) {
-    const p0 = pts[Math.max(i - 1, 0)],
-      p1 = pts[i],
-      p2 = pts[i + 1],
-      p3 = pts[Math.min(i + 2, n - 1)];
-    const c1x = r(p1.x + (smooth * (p2.x - p0.x)) / 6),
-      c1y = r(p1.y + (smooth * (p2.y - p0.y)) / 6);
-    const c2x = r(p2.x - (smooth * (p3.x - p1.x)) / 6),
-      c2y = r(p2.y - (smooth * (p3.y - p1.y)) / 6);
-    d += ` C ${c1x},${c1y} ${c2x},${c2y} ${r(p2.x)},${r(p2.y)}`;
+  if (n === 1) return circle(pts[0], pts[0].half);
+
+  // Unit heading into each point, pointing back toward the previous one.
+  const head: Vec[] = new Array(n);
+  for (let i = 1; i < n; i++) {
+    const dx = pts[i - 1].x - pts[i].x,
+      dy = pts[i - 1].y - pts[i].y;
+    const len = Math.hypot(dx, dy) || 1;
+    head[i] = { x: dx / len, y: dy / len };
   }
-  return d;
-}
+  head[0] = head[1];
 
-function centerlinePath(nodes: Node[], smooth: number): string {
-  if (nodes.length === 1) return `M ${r(nodes[0].x)},${r(nodes[0].y)}`;
-  return `M ${r(nodes[0].x)},${r(nodes[0].y)}` + splineSegments(nodes, smooth);
-}
-
-// --- variable-width outline ---
-
-// Filled circle, for a single-point stroke (a dot / held tap).
-function dotPath(c: Vec, radius: number): string {
-  const rad = Math.max(radius, 0.5);
-  return (
-    `M ${r(c.x - rad)},${r(c.y)} ` +
-    `A ${r(rad)},${r(rad)} 0 1 0 ${r(c.x + rad)},${r(c.y)} ` +
-    `A ${r(rad)},${r(rad)} 0 1 0 ${r(c.x - rad)},${r(c.y)} Z`
-  );
-}
-
-// Per-node left/right outline points. Each node is a circle of radius half[i];
-// the outline edges are the common tangents between consecutive circles, so the
-// contact point tilts off the plain perpendicular by the rate the width changes
-// along the stroke: sinφ = -d(half)/ds. With a constant width (φ = 0) this is a
-// plain perpendicular offset; where the width tapers, the contacts rotate so the
-// edges leave the end caps *tangentially* — a smooth teardrop, not a mushroom
-// (a perpendicular offset would meet the round cap at a concave corner).
-//
-// The tilt is clamped shy of ±90° so a very steep taper (a wide pool feeding a
-// thin line) keeps a visible cap instead of collapsing both contacts onto one
-// pole. `sinp` is returned so the caps can pick the right arc sweep.
-const MAX_TILT = 0.9;
-function offsetPoints(
-  nodes: Node[],
-  half: number[],
-  i: number,
-): { left: Vec; right: Vec; sinp: number } {
-  const n = nodes.length;
-  const a = Math.max(i - 1, 0),
-    b = Math.min(i + 1, n - 1);
-  let tx = nodes[b].x - nodes[a].x,
-    ty = nodes[b].y - nodes[a].y;
-  const ds = Math.hypot(tx, ty) || 1;
-  tx /= ds;
-  ty /= ds; // unit tangent (direction of travel)
-  const px = -ty,
-    py = tx; // unit normal, 90° left of travel
-  let sinp = -(half[b] - half[a]) / ds;
-  sinp = sinp < -MAX_TILT ? -MAX_TILT : sinp > MAX_TILT ? MAX_TILT : sinp;
-  const cosp = Math.sqrt(1 - sinp * sinp);
-  const h = half[i];
-  return {
-    left: {
-      x: nodes[i].x + (cosp * px + sinp * tx) * h,
-      y: nodes[i].y + (cosp * py + sinp * ty) * h,
-    },
-    right: {
-      x: nodes[i].x + (-cosp * px + sinp * tx) * h,
-      y: nodes[i].y + (-cosp * py + sinp * ty) * h,
-    },
-    sinp,
-  };
-}
-
-// Drop nodes whose circle is wholly inside an adjacent node's circle. Such a
-// node lies under the outline (the bigger circle already covers it), so it adds
-// nothing — but it is exactly the case the tangent offset can't handle: when a
-// wide pool feeds a node a fraction of a pixel away (a hold at the start, then
-// the pen barely moves on), there is no common tangent between the two circles,
-// and forcing one folds the edge back and bulges the outline past maxWidth.
-// Removing the contained node guarantees every surviving pair is far enough
-// apart to share a real tangent (ds > |Δhalf|), so the edge never folds.
-function dropContained(nodes: Node[], half: number[]): { nodes: Node[]; half: number[] } {
-  const outN: Node[] = [],
-    outH: number[] = [];
-  for (let i = 0; i < nodes.length; i++) {
-    if (outN.length) {
-      const last = outN[outN.length - 1],
-        lh = outH[outH.length - 1];
-      const d = Math.hypot(nodes[i].x - last.x, nodes[i].y - last.y);
-      if (d + half[i] <= lh) continue; // node i sits inside the last kept node
-      if (d + lh <= half[i]) {
-        outN.pop();
-        outH.pop();
-      } // last kept node sits inside node i
-    }
-    outN.push(nodes[i]);
-    outH.push(half[i]);
-  }
-  return { nodes: outN, half: outH };
-}
-
-// The filled shape as ONE closed outline: offset the centerline by the per-node
-// half-width to a left edge and a right edge, run a smooth spline down the left
-// edge, round-cap across the tip, back up the right edge, and round-cap across
-// the tail. Far fewer points than a per-sample strip, and a single contour.
-//
-// Tradeoff vs. a per-segment strip: vertex normals can let the inner edge cross
-// itself where the centerline bends sharply. Under nonzero fill the consistent
-// winding (left forward / right backward) keeps those overlaps filled solid, so
-// it reads fine; the width- and centerline-smoothing keep bends gentle enough
-// that the edges don't invert in practice.
-function outlinePath(allNodes: Node[], allHalf: number[], o: Required<RenderOptions>): string {
-  const { nodes, half } = dropContained(allNodes, allHalf);
-  const n = nodes.length;
-  // Everything collapsed into one pool → just the pool circle.
-  if (n === 1) return dotPath(nodes[0], Math.max(half[0], 0.5));
   const left: Vec[] = [],
     right: Vec[] = [];
-  let sinp0 = 0,
-    sinpN = 0;
+  let prevSharp = false;
+
   for (let i = 0; i < n; i++) {
-    const e = offsetPoints(nodes, half, i);
-    left.push(e.left);
-    right.push(e.right);
-    if (i === 0) sinp0 = e.sinp;
-    if (i === n - 1) sinpN = e.sinp;
-  }
-  const rightRev = right.slice().reverse();
-  const tip = r(half[n - 1]),
-    tail = r(half[0]);
-  // The caps are arcs of the end circles between the tilted edge contacts. Where
-  // the width tapers the contacts shift toward the narrow side, so the cap that
-  // wraps the wide back becomes a major arc (>180°): tail wraps the back, so it
-  // is major when the start tapers down (sinp0 > 0); the tip wraps the front, so
-  // it is major when the end flares out (sinpN < 0). Sweep 0 keeps each cap
-  // bulging past its end; a zero half-width collapses the cap to a point.
-  const tipLarge = sinpN < 0 ? 1 : 0;
-  const tailLarge = sinp0 > 0 ? 1 : 0;
-  return (
-    `M ${r(left[0].x)},${r(left[0].y)}` +
-    splineSegments(left, o.smooth) +
-    ` A ${tip},${tip} 0 ${tipLarge} 0 ${r(right[n - 1].x)},${r(right[n - 1].y)}` +
-    splineSegments(rightRev, o.smooth) +
-    ` A ${tail},${tail} 0 ${tailLarge} 0 ${r(left[0].x)},${r(left[0].y)} Z`
-  );
-}
+    const p = pts[i],
+      h = p.half,
+      v = head[i];
+    const next = i < n - 1 ? head[i + 1] : v;
+    const turn = i < n - 1 ? v.x * next.x + v.y * next.y : 1;
+    const back = i > 0 ? v.x * head[i - 1].x + v.y * head[i - 1].y : 1;
 
-// Round joins at sharp turns. The single-contour outline pinches where the
-// centerline doubles back (a hairpin): the offset edges cross and the outer
-// corner is left unrounded. A filled disc at such a node — drawn as its own
-// shape so fill-rules can't punch a hole through the outline — patches the turn
-// into a proper round join of the local width. Gentle bends are already rounded
-// by the edge spline, so only turns past ~90° (cos of the deviation < 0) qualify.
-function cornerDiscs(nodes: Node[], half: number[]): string[] {
-  const discs: string[] = [];
-  for (let i = 1; i < nodes.length - 1; i++) {
-    const ax = nodes[i].x - nodes[i - 1].x,
-      ay = nodes[i].y - nodes[i - 1].y;
-    const bx = nodes[i + 1].x - nodes[i].x,
-      by = nodes[i + 1].y - nodes[i].y;
-    const la = Math.hypot(ax, ay),
-      lb = Math.hypot(bx, by);
-    if (la === 0 || lb === 0) continue;
-    if ((ax * bx + ay * by) / (la * lb) < 0) discs.push(dotPath(nodes[i], Math.max(half[i], 0.5)));
-  }
-  return discs;
-}
+    const sharpHere = back < 0 && !prevSharp;
+    const sharpNext = turn < 0;
 
-// --- public entry point ---
-
-// Reduce a raw stroke's point count with the same time-chord test the renderer
-// uses for its `simplify` option — drop samples within `eps` px of the chord
-// their neighbours interpolate by time. Keeps x/y/t on the surviving points.
-export function simplifyStroke(stroke: Stroke, eps: number): Stroke {
-  if (stroke.length <= 2 || eps <= 0) return stroke;
-  return collinearKeep(stroke, eps).map((i) => stroke[i]);
-}
-
-function simplifyCollinear(
-  nodes: Node[],
-  half: number[],
-  eps: number,
-): { nodes: Node[]; half: number[] } {
-  if (nodes.length <= 2 || eps <= 0) return { nodes, half };
-  const keep = collinearKeep(nodes, eps);
-  return { nodes: keep.map((i) => nodes[i]), half: keep.map((i) => half[i]) };
-}
-
-// Moving-average smooth of a per-node series ([1,2,1]/4), endpoints fixed. The
-// inter-point time (hence raw width) is noisy; this keeps the stroke smooth.
-function smoothSeries(arr: number[], passes: number): number[] {
-  let cur = arr;
-  for (let p = 0; p < passes && cur.length > 2; p++) {
-    const next = cur.slice();
-    for (let i = 1; i < cur.length - 1; i++) next[i] = (cur[i - 1] + 2 * cur[i] + cur[i + 1]) / 4;
-    cur = next;
-  }
-  return cur;
-}
-
-// --- per-node half-width, from timing ---
-//
-// The longer the pen lingered at a node, the wider the ink: `dt` ramps linearly
-// from minWidth to maxWidth over `dwellFull` ms, clamped so a long hold never
-// exceeds maxWidth.
-function halfWidth(node: Node, o: Required<RenderOptions>): number {
-  return (o.minWidth + (o.maxWidth - o.minWidth) * clamp01(node.dt / o.dwellFull)) / 2;
-}
-
-export function renderStroke(
-  stroke: Stroke,
-  options: RenderOptions = {},
-  tapFloor = false,
-): StrokeRender {
-  const o = { ...RENDER_DEFAULTS, ...options };
-
-  const nodes = collapse(stroke);
-  if (nodes.length === 0) return { curve: "", shapes: [], width: o.maxWidth };
-
-  const half = smoothSeries(
-    nodes.map((n) => halfWidth(n, o)),
-    o.smoothWidth,
-  );
-
-  // A single position. While a stroke is in progress (or replaying), a lone node
-  // is the seed of a line, so render it at its plain width to grow seamlessly
-  // into the stroke. Only a committed standalone tap (`tapFloor`) gets the
-  // visible dot floor: a quick tap isn't a "hold to grow" gesture, so only a
-  // deliberate hold past DOT_TAP_MS grows it — floored so a quick tap still reads.
-  if (nodes.length === 1) {
-    let radius = half[0];
-    if (tapFloor) {
-      const factor = clamp01((nodes[0].dt - DOT_TAP_MS) / o.dwellFull);
-      radius = Math.max(o.minWidth, (o.minWidth + (o.maxWidth - o.minWidth) * factor) / 2);
+    if (sharpHere || sharpNext) {
+      const ox = v.y * h,
+        oy = -v.x * h;
+      for (let s = 0; s <= 1; s += 1 / CORNER_STEPS) {
+        left.push(rotate({ x: p.x - ox, y: p.y - oy }, p, Math.PI * s));
+        right.push(rotate({ x: p.x + ox, y: p.y + oy }, p, -Math.PI * s));
+      }
+      prevSharp = sharpNext;
+      continue;
     }
-    return {
-      curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`,
-      shapes: [dotPath(nodes[0], radius)],
-      width: o.maxWidth,
-    };
+    prevSharp = false;
+
+    const bx = lerp(next.x, v.x, turn),
+      by = lerp(next.y, v.y, turn);
+    const bl = Math.hypot(bx, by) || 1;
+    const ox = (by / bl) * h,
+      oy = (-bx / bl) * h;
+    left.push({ x: p.x - ox, y: p.y - oy });
+    right.push({ x: p.x + ox, y: p.y + oy });
   }
 
-  // Widths are computed above at full resolution; now drop redundant collinear
-  // nodes for a lighter, smoother curve and outline.
-  const s = simplifyCollinear(nodes, half, o.simplify);
+  // Caps sweep a half turn around each end, from one edge across to the other,
+  // so the loop closes with a round nib. Built before `right` is reversed.
+  const startCap: Vec[] = [],
+    endCap: Vec[] = [];
+  for (let k = 1; k < CAP_STEPS; k++) {
+    const s = k / CAP_STEPS;
+    endCap.push(rotate(left[left.length - 1], pts[n - 1], Math.PI * s));
+    startCap.push(rotate(right[0], pts[0], Math.PI * s));
+  }
 
+  return left.concat(endCap, right.reverse(), startCap);
+}
+
+function circle(c: Vec, radius: number): Vec[] {
+  const rad = Math.max(radius, 0.5);
+  const out: Vec[] = [];
+  for (let k = 0; k < CAP_STEPS * 2; k++) {
+    const a = (k / (CAP_STEPS * 2)) * Math.PI * 2;
+    out.push({ x: c.x + Math.cos(a) * rad, y: c.y + Math.sin(a) * rad });
+  }
+  return out;
+}
+
+// --- stage 5: polygon → path ---
+//
+// A closed loop as one path: a Catmull-Rom spline through the vertices, emitted
+// as chained cubics. Each interior control point pulls toward the chord of its
+// neighbours, so the curve is smooth and passes exactly through every vertex.
+//
+// It has to INTERPOLATE. The usual shortcut — a quadratic through each edge's
+// midpoint using the vertex as its control — only approximates, cutting every
+// corner toward the centre of curvature by |P₋₁ + P₊₁ - 2P| / 4, or L²/4R around
+// an arc. Both edges of a ribbon bend the same way, so that cut does not cancel:
+// it walks the whole stroke to the inside of the bend, by a distance that is a
+// large fraction of the stroke's own width when the stroke is thin.
+function loopPath(pts: Vec[]): string {
+  const n = pts.length;
+  if (n < 3) return "";
+  const at = (i: number) => pts[(i + n) % n];
+  let d = `M ${r(pts[0].x)},${r(pts[0].y)}`;
+  for (let i = 0; i < n; i++) {
+    const p0 = at(i - 1),
+      p1 = at(i),
+      p2 = at(i + 1),
+      p3 = at(i + 2);
+    const c1x = p1.x + (p2.x - p0.x) / 6,
+      c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6,
+      c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${r(c1x)},${r(c1y)} ${r(c2x)},${r(c2y)} ${r(p2.x)},${r(p2.y)}`;
+  }
+  return d + " Z";
+}
+
+function centerlinePath(pts: Pt[]): string {
+  if (pts.length === 0) return "";
+  if (pts.length === 1) return `M ${r(pts[0].x)},${r(pts[0].y)}`;
+  return "M " + pts.map((p) => `${r(p.x)},${r(p.y)}`).join(" L ");
+}
+
+// --- public entry points ---
+
+function points(stroke: Stroke, o: Required<RenderOptions>): Pt[] {
+  return decimate(resolve(stroke, halfWidths(stroke, o)), o.simplify);
+}
+
+export function renderStroke(stroke: Stroke, options: RenderOptions = {}): StrokeRender {
+  const o = { ...RENDER_DEFAULTS, ...options };
+  if (stroke.length === 0) return { curve: "", shapes: [], width: o.maxWidth };
+
+  const pts = points(stroke, o);
   return {
-    curve: centerlinePath(s.nodes, o.smooth),
-    shapes: [outlinePath(s.nodes, s.half, o), ...cornerDiscs(s.nodes, s.half)],
+    curve: centerlinePath(pts),
+    shapes: [loopPath(outlinePoints(pts))],
     width: o.maxWidth,
   };
 }
 
-// Debug geometry: the cubic centerline path, every outline (offset) point — the
-// left/right edge of the ribbon at each node — and `dots`, the raw recorded
-// input positions the curve is fitted to.
+// Debug geometry: the centerline, every outline vertex, and the raw recorded
+// input positions the outline is built from.
 export function strokeDebug(
   stroke: Stroke,
   options: RenderOptions = {},
 ): { curve: string; points: Vec[]; dots: Vec[] } {
   const o = { ...RENDER_DEFAULTS, ...options };
   const dots = stroke.map((p) => ({ x: p.x, y: p.y }));
-  const nodes = collapse(stroke);
-  if (nodes.length === 0) return { curve: "", points: [], dots };
-  if (nodes.length === 1)
-    return {
-      curve: `M ${r(nodes[0].x)},${r(nodes[0].y)}`,
-      points: [{ x: nodes[0].x, y: nodes[0].y }],
-      dots,
-    };
+  if (stroke.length === 0) return { curve: "", points: [], dots };
+  const pts = points(stroke, o);
+  return { curve: centerlinePath(pts), points: outlinePoints(pts), dots };
+}
 
-  const half = smoothSeries(
-    nodes.map((n) => halfWidth(n, o)),
-    o.smoothWidth,
-  );
-  const s = simplifyCollinear(nodes, half, o.simplify);
-  const d = dropContained(s.nodes, s.half);
-  const points: Vec[] = [];
-  for (let i = 0; i < d.nodes.length; i++) {
-    const e = offsetPoints(d.nodes, d.half, i);
-    points.push(e.left, e.right);
+// Reduce a raw stroke's point count for storage. Unlike `decimate` this runs on
+// samples that still carry time, so the chord is parameterized by time and a
+// point survives if either its position or its timing departs from it — dropping
+// a sample must not change the speeds the renderer will derive.
+export function simplifyStroke(stroke: Stroke, eps: number): Stroke {
+  const n = stroke.length;
+  if (n <= 2 || eps <= 0) return stroke;
+  const keep = [stroke[0]];
+  let a = 0;
+  while (a < n - 1) {
+    let k = a + 1;
+    while (k < n - 1) {
+      const end = k + 1;
+      const span = stroke[end].t - stroke[a].t;
+      let ok = span > 0;
+      for (let j = a + 1; ok && j <= k; j++) {
+        const s = (stroke[j].t - stroke[a].t) / span;
+        ok =
+          Math.abs(stroke[j].x - lerp(stroke[a].x, stroke[end].x, s)) <= eps &&
+          Math.abs(stroke[j].y - lerp(stroke[a].y, stroke[end].y, s)) <= eps;
+      }
+      if (!ok) break;
+      k = end;
+    }
+    keep.push(stroke[k]);
+    a = k;
   }
-  return { curve: centerlinePath(s.nodes, o.smooth), points, dots };
+  return keep;
 }

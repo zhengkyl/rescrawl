@@ -15,6 +15,9 @@ export const DEFAULT_CONFIG = {
 
 export type Config = typeof DEFAULT_CONFIG;
 
+// ms of idle after a stroke before recording ends
+export const LIVE_TIMEOUT = 2000;
+
 // --- Bounds & framing ---
 
 // `t` is monotonic within a stroke, so its first/last sample are its time span.
@@ -36,6 +39,7 @@ export function activeStrokeAt(strokes: Stroke[], t: number): number | null {
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
 export function strokesBounds(strokes: Stroke[]): Bounds | null {
+  if (strokes.length === 0) return null;
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
@@ -47,7 +51,6 @@ export function strokesBounds(strokes: Stroke[]): Bounds | null {
       if (pt.x > maxX) maxX = pt.x;
       if (pt.y > maxY) maxY = pt.y;
     }
-  if (minX === Infinity) return null;
   return { minX, minY, maxX, maxY };
 }
 

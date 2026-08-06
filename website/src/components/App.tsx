@@ -1,46 +1,98 @@
-import { Component } from 'preact';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import type { ReadonlySignal, Signal } from '@preact/signals';
+import { computed, useSignal } from '@preact/signals';
+import { useEffect, useMemo, useRef } from 'preact/hooks';
 import { useApp } from '../context';
 import type { ActiveStrategy, DebugLayers, InkOptions } from '../curves';
 import { getActiveStrategies, INK_COLOR, inkDebug, renderInk, STRATEGY_DEFS } from '../curves';
 import { useStrokeCache } from '../hooks/useStrokeCache';
+import { useStrokes } from '../strokeStore';
 import type { Stroke } from '../utils';
 import { activeStrokeAt, strokeEnd, withinStroke } from '../utils';
-import { CanvasBackground } from './CanvasBackground';
 import { drawLine } from './strokeRender';
 
 const INK_CHUNK = 128; // strokes per settled band
 
+// Threshold between pointermove events before record as hold
+const MIN_HOLD_MS = 100;
+// Best guess of pointermove timespan after a hold: 16ms / 2
+const TRAVEL_MS = 8;
+
 type InkCache = ReturnType<typeof useStrokeCache>;
 
-// A band of committed strokes, rendering only those settled (fully drawn) at the
-// playhead from cached geometry. `shouldComponentUpdate` keyed on `stamp` (how
-// many of the band's strokes are settled) skips re-rendering on the frames where
-// no stroke in this band crossed the playhead — so a replay frame rebuilds at
-// most the one band a stroke just crossed, not the whole scene, which is what was
-// drowning the cycle collector. `strokes` is compared by content so committing a
-// stroke only rebuilds the band that changed, not every band.
-class InkChunk extends Component<{ strokes: Stroke[]; drawTime: number; inkOptions: InkOptions; cache: InkCache; stamp: number }> {
-  shouldComponentUpdate(next: InkChunk['props']) {
-    const p = this.props;
-    if (p.stamp !== next.stamp || p.inkOptions !== next.inkOptions || p.cache !== next.cache) return true;
-    if (p.strokes === next.strokes) return false;
-    if (p.strokes.length !== next.strokes.length) return true;
-    for (let i = 0; i < p.strokes.length; i++) if (p.strokes[i] !== next.strokes[i]) return true;
-    return false;
-  }
-  render() {
-    const { strokes, drawTime, inkOptions, cache } = this.props;
-    return (
-      <g>
-        {strokes.map((s, j) =>
-          strokeEnd(s) <= drawTime
-            ? drawLine(cache.get(s, '', () => renderInk(s, inkOptions, Infinity)), j, INK_COLOR)
-            : null,
-        )}
-      </g>
-    );
-  }
+// A band of committed strokes plus a computed for how many of them are settled
+// (fully drawn) at the playhead. Computeds only notify when their value actually
+// changes, so the count is the band's wake-up signal: it fires on the frames a
+// stroke in this band crosses the playhead, and stays silent on every other one.
+type Band = { strokes: Stroke[]; settled: ReadonlySignal<number> };
+
+function countSettled(strokes: Stroke[], elapsed: Signal<number>): number {
+  let n = 0;
+  for (const s of strokes) if (strokeEnd(s) <= elapsed.value) n++;
+  return n;
+}
+
+function sameStrokes(a: Stroke[], b: Stroke[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// One band's settled strokes, drawn from cached geometry. Reading `settled.value`
+// is the entire subscription — signals auto-memoise a component that reads them,
+// so this re-renders when its own count changes (or its strokes/ink options do)
+// and sits out every other frame. The playhead is read with `peek` so it is
+// deliberately *not* a dependency: which strokes are settled can only change when
+// the count does, so the count is what decides a fresh read is needed.
+function InkBand({ strokes, settled, elapsed, inkOptions, cache }: Band & {
+  elapsed: Signal<number>;
+  inkOptions: InkOptions;
+  cache: InkCache;
+}) {
+  if (settled.value === 0) return null;
+  const drawTime = elapsed.peek();
+  return (
+    <g>
+      {strokes.map((s, j) =>
+        strokeEnd(s) <= drawTime
+          ? drawLine(cache.get(s, '', () => renderInk(s, inkOptions, Infinity)), j, INK_COLOR)
+          : null,
+      )}
+    </g>
+  );
+}
+
+// The 0–few strokes straddling the playhead — the only ink whose shape changes
+// per frame, so it reads the playhead directly and is what re-renders with it.
+function ActiveInk({ strokes, elapsed, inkOptions }: {
+  strokes: Stroke[];
+  elapsed: Signal<number>;
+  inkOptions: InkOptions;
+}) {
+  const drawTime = elapsed.value;
+  return (
+    <g>
+      {strokes.map((s, i) =>
+        withinStroke(s, drawTime)
+          ? drawLine(renderInk(s, inkOptions, drawTime), i, INK_COLOR)
+          : null,
+      )}
+    </g>
+  );
+}
+
+// The stroke under the playhead — highlighted while idle so
+// it's clear which stroke the current time belongs to. Its own component so the
+// per-frame read stays out of <App>, and so it keeps painting over the overlays.
+function ActiveHighlight({ strokes, elapsed, isIdle, primary }: {
+  strokes: Stroke[];
+  elapsed: Signal<number>;
+  isIdle: boolean;
+  primary: ActiveStrategy;
+}) {
+  const drawTime = elapsed.value;
+  const active = !isIdle ? null : activeStrokeAt(strokes, drawTime);
+  if (active === null || !strokes[active]) return null;
+  return <g>{drawLine(primary.def.render(strokes[active], primary.param, drawTime), 'active', '#4f8ef7')}</g>;
 }
 
 // Debug overlay for one ink stroke, each layer independently toggleable: the
@@ -65,15 +117,16 @@ function drawDebug(stroke: Stroke, options: InkOptions, t: number, key: string |
 // settled count) and an active layer (the 0–few strokes straddling the playhead,
 // rebuilt per frame). Strokes after the playhead are culled. Mirrors the ink
 // layer so an overlay doesn't reintroduce the per-frame "rebuild every stroke".
-function OverlayStrategy({ def, param, strokes, drawTime, inkOptions, debug, cache }: {
+function OverlayStrategy({ def, param, strokes, elapsed, inkOptions, debug, cache }: {
   def: ActiveStrategy['def'];
   param: number;
   strokes: Stroke[];
-  drawTime: number;
+  elapsed: Signal<number>;
   inkOptions: InkOptions;
   debug: DebugLayers;
   cache: ReturnType<typeof useStrokeCache>;
 }) {
+  const drawTime = elapsed.value;
   const isDebug = def.id === 'debug';
   const settledCount = strokes.reduce((n, s) => n + (strokeEnd(s) <= drawTime ? 1 : 0), 0);
   const settled = useMemo(
@@ -108,16 +161,45 @@ function OverlayStrategy({ def, param, strokes, drawTime, inkOptions, debug, cac
   );
 }
 
+// The in-progress stroke — ink base plus any active overlay curves, all drawn in
+// full (`Infinity`) since it exists only up to the live head. Rebuilt from
+// scratch on every frame the pen is down, so it owns that read and keeps <App>
+// (and with it the committed bands) out of the drawing loop.
+function LiveStroke({ points, inkOptions, strategies, debug }: {
+  points: Signal<Stroke | null>;
+  inkOptions: InkOptions;
+  strategies: ActiveStrategy[];
+  debug: DebugLayers;
+}) {
+  const live = points.value;
+  if (live === null) return null;
+  return (
+    <>
+      <g>{drawLine(renderInk(live, inkOptions, Infinity), 'live-ink', INK_COLOR)}</g>
+      {strategies.map(({ def, param }) => (
+        <g key={`live-${def.id}`}>
+          {def.id === 'debug'
+            ? drawDebug(live, inkOptions, Infinity, 'live-dbg', debug)
+            : drawLine(def.render(live, param, Infinity), 'live', def.color)}
+        </g>
+      ))}
+    </>
+  );
+}
+
 // The drawing surface: records pointer input into strokes and renders the live
 // preview plus all committed strokes. Everything it touches comes from context.
 export function App() {
-  const { store, view, clock, inkOptions, strategies, debug, config } = useApp();
+  const { view, clock, inkOptions, strategies, debug, config } = useApp();
+  const store = useStrokes();
 
   // In-progress stroke: `currentStrokeRef` is the authoritative builder (read on
   // commit); `livePoints` mirrors it for rendering through the active strategies.
+  // A signal, not state, so the per-frame rewrite while the pen is down re-renders
+  // <LiveStroke> alone instead of this whole component.
   const currentStrokeRef = useRef<Stroke | null>(null);
   const drawLoopRef = useRef<number | null>(null);
-  const [livePoints, setLivePoints] = useState<Stroke | null>(null);
+  const livePoints = useSignal<Stroke | null>(null);
 
   // Stop the draw loop if we unmount mid-stroke.
   useEffect(() => () => { if (drawLoopRef.current !== null) cancelAnimationFrame(drawLoopRef.current); }, []);
@@ -128,28 +210,28 @@ export function App() {
     // Middle-button drag is the pan gesture, handled by useCanvasView.
     if (e.button !== 0 || clock.isPlaying) return;
 
+    if (currentStrokeRef.current !== null) return;
+
     view.svgRef.current!.setPointerCapture(e.pointerId);
 
-    // Records from wherever the playhead sits. Starting a stroke during the grace
-    // period continues the running clock, so the gap is real; after the idle cap
-    // fired the playhead is already parked at the capped end, which becomes the
-    // gap before this stroke.
-    clock.startRecording();
+    if (clock.isIdle) {
+      clock.startRecording(e.timeStamp);
+    }
 
     const pt = view.svgToContent(e.clientX, e.clientY);
-    clock.penDown();
-    currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: clock.now() }];
+    const now = clock.nowFromTs(e.timeStamp)
+    clock.penDown(now);
+    currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: now }];
     drawFrame(); // renders the live stroke + starts the dwell loop
   }
 
   // While the pointer is down, re-render the in-progress stroke every frame with
-  // a trailing "tip" point at (last position, now). The advancing tip timestamp
-  // is how dwell grows a held dot / pools a pause, with no pointer events firing.
+  // a trailing "tip" point at (last position, now).
   function drawFrame() {
     const rec = currentStrokeRef.current;
     if (rec === null) { drawLoopRef.current = null; return; }
     const last = rec[rec.length - 1];
-    setLivePoints([...rec, { x: last.x, y: last.y, t: clock.now() }]);
+    livePoints.value = [...rec, { x: last.x, y: last.y, t: clock.now() }];
     drawLoopRef.current = requestAnimationFrame(drawFrame);
   }
 
@@ -158,132 +240,103 @@ export function App() {
     if (rec === null) return;
 
     const pt = view.svgToContent(e.clientX, e.clientY);
-    const t = clock.now();
-
-    // Freeze the pen's dwell at the previous position before recording the new
-    // one. This is what makes time belong to the gap between two samples rather
-    // than to a sample itself, so the renderer reads a node's dwell straight off
-    // the next node's timestamp. It commits what the draw-loop tip only rendered.
     const last = rec[rec.length - 1];
-    rec.push({ x: last.x, y: last.y, t });
+    // some pens report non movement, ignore to use same hold logic as mouse
+    if (pt.x === last.x && pt.y === last.y) return;
+
+    // split gap since last point into hold, then move
+    const t = clock.nowFromTs(e.timeStamp);
+    const moveStart = t - TRAVEL_MS
+    if (moveStart - last.t >= MIN_HOLD_MS) {
+      rec.push({ x: last.x, y: last.y, t: moveStart });
+    }
+
     rec.push({ x: pt.x, y: pt.y, t });
   }
 
-  function commitStroke() {
+  function commitStroke(e: PointerEvent) {
     const rec = currentStrokeRef.current;
     if (rec === null) return;
     if (drawLoopRef.current !== null) { cancelAnimationFrame(drawLoopRef.current); drawLoopRef.current = null; }
     // Capture the pointer-up point (final position + release time) so every
     // stroke has >= 2 points and the end dwell is recorded.
+    const now = clock.nowFromTs(e.timeStamp)
+
     const last = rec[rec.length - 1];
-    const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: clock.now() }];
+    const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: now }];
     currentStrokeRef.current = null;
-    setLivePoints(null);
-    store.draw(stroke);
-    // The playhead keeps running through the grace period, so the gap before the
-    // next stroke is real time; the idle cap parks it if the grace runs out.
-    clock.penUp();
+    livePoints.value = null;
+    store.append(stroke);
+    clock.penUp(now);
   }
 
   // --- Derived render data ---
 
-  const { strokes, insertionPoint } = store;
+  const strokes = store.strokes.value;
   const activeStrategies = useMemo(() => getActiveStrategies(strategies), [strategies]);
   const primaryStrategy: ActiveStrategy = activeStrategies[0] ?? { def: STRATEGY_DEFS[0], param: 0 };
-
-  // The stroke under the playhead — highlighted while reviewing (not recording)
-  // so it's clear which stroke the current time belongs to.
-  const activeStroke = clock.isRecording ? null : activeStrokeAt(strokes, clock.elapsed);
-
-  // Renderers draw each stroke "as of" the playhead — the canvas is a viewport
-  // onto time, so nothing later than this is visible. `elapsed` is live in every
-  // mode (the replay and recording loops both drive it), so no clock read here.
-  const drawTime = clock.elapsed;
 
   // Ink is the always-on base layer; reference curves draw on top. Geometry is
   // cached per stroke (keyed by identity) so it's computed once, not per frame.
   const inkCache = useStrokeCache(inkOptions);
   const overlayCache = useStrokeCache(activeStrategies);
 
-  // Render committed strokes as fixed-size bands so a replay frame only rebuilds
-  // the one band a stroke just crossed (see InkChunk), not the whole scene — that
-  // per-frame rebuild was saturating the cycle collector. The 0–few strokes
-  // straddling the playhead are rebuilt live each frame; later strokes are culled.
-  const inkChunks = useMemo(() => {
-    const cs: Stroke[][] = [];
-    for (let i = 0; i < strokes.length; i += INK_CHUNK) cs.push(strokes.slice(i, i + INK_CHUNK));
-    return cs;
+  // Committed strokes in fixed-size bands, so a replay frame re-renders at most
+  // the one band a stroke just crossed rather than the whole scene — that
+  // per-frame rebuild was saturating the cycle collector. Bands whose contents
+  // survive a rebuild keep their identity (and their computed), so committing a
+  // stroke only re-renders the band that changed. Note that <App> itself never
+  // reads the playhead: every per-frame reader below is its own component.
+  const bandsRef = useRef<Band[]>([]);
+  const bands = useMemo(() => {
+    const prev = bandsRef.current;
+    const next: Band[] = [];
+    for (let i = 0; i < strokes.length; i += INK_CHUNK) {
+      const chunk = strokes.slice(i, i + INK_CHUNK);
+      const old = prev[next.length];
+      next.push(old && sameStrokes(old.strokes, chunk)
+        ? old
+        : { strokes: chunk, settled: computed(() => countSettled(chunk, clock.elapsed)) });
+    }
+    bandsRef.current = next;
+    return next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strokes]);
-  const settledInk = inkChunks.map((chunk, ci) => {
-    let stamp = 0;
-    for (const s of chunk) if (strokeEnd(s) <= drawTime) stamp++;
-    return <InkChunk key={ci} strokes={chunk} drawTime={drawTime} inkOptions={inkOptions} cache={inkCache} stamp={stamp} />;
-  });
-  const activeInk = (
-    <g>
-      {strokes.map((s, i) =>
-        withinStroke(s, drawTime)
-          ? drawLine(renderInk(s, inkOptions, drawTime), i, INK_COLOR)
-          : null,
-      )}
-    </g>
-  );
   const overlayLayer = activeStrategies.map(({ def, param }) => (
     <OverlayStrategy key={def.id} def={def} param={param} strokes={strokes}
-      drawTime={drawTime} inkOptions={inkOptions} debug={debug} cache={overlayCache} />
+      elapsed={clock.elapsed} inkOptions={inkOptions} debug={debug} cache={overlayCache} />
   ));
-
-  const crosshairPos = insertionPoint < strokes.length ? strokes[insertionPoint][0] : null;
 
   return (
     <svg
       ref={view.svgRef}
       id="canvas-svg"
       class={clock.isRecording ? 'live' : ''}
-      onPointerDown={handlePointerDown as any}
-      onPointerMove={handlePointerMove as any}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
       onPointerUp={commitStroke}
       onPointerCancel={commitStroke}
       // stylus long press
       onContextMenu={(e) => e.preventDefault()}
     >
-      <g ref={view.viewportRef}>
-        <CanvasBackground guidelines={config.guidelines} />
+      <g transform={view.transform}>
 
         {/* Committed strokes: settled (cached) + the strokes straddling the
             playhead, ink base then overlay curves */}
-        {settledInk}
-        {activeInk}
+        {bands.map((band, ci) => (
+          <InkBand key={ci} strokes={band.strokes} settled={band.settled}
+            elapsed={clock.elapsed} inkOptions={inkOptions} cache={inkCache} />
+        ))}
+        <ActiveInk strokes={strokes} elapsed={clock.elapsed} inkOptions={inkOptions} />
         {overlayLayer}
 
         {/* Active stroke highlight (under the playhead, while not recording) */}
-        {activeStroke !== null && strokes[activeStroke] && (
-          <g>{drawLine(primaryStrategy.def.render(strokes[activeStroke], primaryStrategy.param, drawTime), 'active', '#4f8ef7')}</g>
-        )}
+        <ActiveHighlight strokes={strokes} elapsed={clock.elapsed}
+          isIdle={clock.isIdle} primary={primaryStrategy} />
 
-        {/* In-progress stroke — ink base plus any active overlay curves */}
-        {livePoints && (
-          <>
-            <g>{drawLine(renderInk(livePoints, inkOptions, Infinity, true), 'live-ink', INK_COLOR)}</g>
-            {activeStrategies.map(({ def, param }) => (
-              <g key={`live-${def.id}`}>
-                {def.id === 'debug'
-                  ? drawDebug(livePoints, inkOptions, Infinity, 'live-dbg', debug)
-                  : drawLine(def.render(livePoints, param, Infinity), 'live', def.color)}
-              </g>
-            ))}
-          </>
-        )}
-
-        {/* Insertion crosshair */}
-        {crosshairPos && (
-          <g>
-            <line x1={crosshairPos.x - 12} y1={crosshairPos.y} x2={crosshairPos.x + 12} y2={crosshairPos.y}
-              stroke="#4f8ef7" stroke-width="1.5" stroke-dasharray="3 3" />
-            <line x1={crosshairPos.x} y1={crosshairPos.y - 12} x2={crosshairPos.x} y2={crosshairPos.y + 12}
-              stroke="#4f8ef7" stroke-width="1.5" stroke-dasharray="3 3" />
-          </g>
-        )}
+        {/* In-progress stroke */}
+        <LiveStroke points={livePoints} inkOptions={inkOptions}
+          strategies={activeStrategies} debug={debug} />
       </g>
     </svg>
   );

@@ -2,6 +2,7 @@ import { useRef, useEffect, useMemo, useState } from 'preact/hooks';
 import { useApp } from '../context';
 import { INK_COLOR, renderInk } from '../curves';
 import { useCanvasView } from '../hooks/useCanvasView';
+import { useStrokes } from '../strokeStore';
 import { countPoints, reframe, serialize, simplifyStrokes, strokesBounds } from '../utils';
 import { drawLine } from './strokeRender';
 
@@ -14,7 +15,8 @@ function formatBytes(n: number): string {
 }
 
 export function ExportDialog() {
-  const { store, inkOptions, setExportOpen } = useApp();
+  const { inkOptions, setExportOpen } = useApp();
+  const strokes = useStrokes().strokes.value;
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [filename, setFilename] = useState('');
   const [padding, setPadding] = useState(DEFAULT_PADDING);
@@ -22,10 +24,10 @@ export function ExportDialog() {
   const [relative, setRelative] = useState(false);
 
   // Preview camera: left-drag pans (button 0) since there's no drawing here.
-  const view = useCanvasView(store.strokes, 0);
+  const view = useCanvasView(0);
 
   // Simplify drives both the preview and the exported file, so derive once.
-  const simplified = useMemo(() => simplifyStrokes(store.strokes, simplify), [store.strokes, simplify]);
+  const simplified = useMemo(() => simplifyStrokes(strokes, simplify), [strokes, simplify]);
   const bounds = strokesBounds(simplified);
   const text = useMemo(() => {
     const effective = reframe(simplified, padding);
@@ -66,7 +68,7 @@ export function ExportDialog() {
           <label>Preview <span class="preview-hint">scroll to zoom · drag to pan</span></label>
           <div class="preview-wrap">
             <svg ref={view.svgRef} class="export-preview">
-              <g ref={view.viewportRef}>
+              <g transform={view.transform}>
                 {simplified.map((s, i) => drawLine(renderInk(s, inkOptions, Infinity), i, INK_COLOR))}
                 {bounds && (
                   <rect
@@ -124,7 +126,7 @@ export function ExportDialog() {
           />
         </div>
         <div class="dialog-field export-size">
-          <span>{countPoints(simplified).toLocaleString()} points{simplify > 0 && ` (of ${countPoints(store.strokes).toLocaleString()})`}</span>
+          <span>{countPoints(simplified).toLocaleString()} points{simplify > 0 && ` (of ${countPoints(strokes).toLocaleString()})`}</span>
           <span class="field-value">{formatBytes(fileSize)}</span>
         </div>
         <div class="dialog-field">

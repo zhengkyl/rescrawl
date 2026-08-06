@@ -4,14 +4,13 @@ import { useContext } from 'preact/hooks';
 import type { DebugLayers, InkOptions, StrategiesState } from './curves';
 import type { useCanvasView } from './hooks/useCanvasView';
 import type { Playhead } from './hooks/usePlayhead';
-import type { StrokeStore } from './strokeStore';
 import type { Config } from './utils';
 
-// Everything the app shares lives here so the drawing surface (App) and the
-// surrounding chrome (Workspace) can each pull exactly what they need instead of
-// threading props down from a single owner.
+// Per-workspace UI state, so the drawing surface (App) and the surrounding
+// chrome (Workspace) can each pull exactly what they need instead of threading
+// props down from a single owner. The strokes themselves are not here — they
+// live in `strokeStore` as module-level signals and are imported directly.
 export type AppContextValue = {
-  store: StrokeStore;
   view: ReturnType<typeof useCanvasView>;
   clock: Playhead;
 
