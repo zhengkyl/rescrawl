@@ -87,6 +87,13 @@ body {
   cursor: crosshair;
   touch-action: none;
   background: white;
+  /* perf: the surface itself is the only event target */
+  pointer-events: all;
+}
+
+/* perf: reduce hit test time */
+#canvas-svg > g {
+  pointer-events: none;
 }
 
 /* Live recording: red crosshair cursor */
