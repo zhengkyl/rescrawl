@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>toOutline lab</title>
+	</head>
+	<body>
+		<div id="app">
+			<aside id="panel">
+				<h1>toOutline</h1>
+
+				<section>
+					<div class="row">
+						<span class="lbl">points</span>
+						<span class="btns">
+							<button data-preset="1">1</button>
+							<button data-preset="2">2</button>
+							<button data-preset="3">3</button>
+							<button data-preset="4">4</button>
+						</span>
+					</div>
+					<div class="row">
+						<span class="lbl"></span>
+						<span class="btns">
+							<button id="add">+ point</button>
+							<button id="del">- point</button>
+						</span>
+					</div>
+					<div id="pointRows" class="pts"></div>
+					<p class="hint">
+						drag a centre or its ring handle. double-click empty space adds a point, drag
+						empty space pans, wheel zooms. arrows nudge, <kbd>[</kbd> <kbd>]</kbd> radius,
+						<kbd>del</kbd> removes.
+					</p>
+				</section>
+
+				<section>
+					<div class="row">
+						<span class="lbl">step</span>
+						<input id="step" type="range" min="0" max="1" value="1" step="1" />
+						<span id="stepNum" class="num">all</span>
+					</div>
+					<div id="stepInfo" class="info"></div>
+				</section>
+
+				<section class="toggles">
+					<label><input type="checkbox" data-show="fill" checked /> fill</label>
+					<label><input type="checkbox" data-show="polygon" /> polygon</label>
+					<label><input type="checkbox" data-show="discs" checked /> discs</label>
+					<label><input type="checkbox" data-show="centerline" checked /> centerline</label>
+					<label><input type="checkbox" data-show="tangents" /> tangent lines</label>
+					<label><input type="checkbox" data-show="contacts" checked /> contacts</label>
+					<label><input type="checkbox" data-show="radii" checked /> contact radii</label>
+					<label><input type="checkbox" data-show="tangentDirs" /> tangent vectors</label>
+					<label><input type="checkbox" data-show="labels" checked /> contact numbers</label>
+					<label><input type="checkbox" data-show="crossings" checked /> self-crossings</label>
+					<label><input type="checkbox" data-show="evenodd" /> even-odd fill</label>
+					<label><input type="checkbox" data-show="drop" /> dropContained first</label>
+				</section>
+
+				<section id="diag"></section>
+			</aside>
+			<main id="stage">
+				<svg id="svg"></svg>
+				<div id="hud"></div>
+			</main>
+		</div>
+		<script type="module" src="/src/main.ts"></script>
+	</body>
+</html>

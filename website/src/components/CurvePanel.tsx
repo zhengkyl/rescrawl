@@ -1,12 +1,61 @@
 import { useApp } from '../context';
-import { STRATEGY_DEFS } from '../curves';
+import { DEBUG_EXTRAS, DEBUG_STAGES, inkStages, STRATEGY_DEFS } from '../curves';
 import type { DebugLayers } from '../curves';
+import { useStrokes } from '../strokeStore';
+import { activeStrokeAt, withinStroke } from '../utils';
 
-const DEBUG_LAYERS: { key: keyof DebugLayers; label: string }[] = [
-  { key: 'centerline', label: 'centerline' },
-  { key: 'offsets', label: 'offset points' },
-  { key: 'dots', label: 'input dots' },
-];
+// How many points survive each stage, for the stroke under the playhead (or the
+// last one drawn). This is the readout that makes the pipeline's order legible:
+// the counts only ever go down, and you can see which stage did the dropping.
+// Its own component so the per-frame playhead read doesn't re-render the panel.
+function StageCounts() {
+  const { clock, inkOptions } = useApp();
+  const store = useStrokes();
+  const strokes = store.strokes.value;
+  const t = clock.elapsed.value;
+  if (strokes.length === 0) return null;
+
+  const i = activeStrokeAt(strokes, t) ?? strokes.length - 1;
+  const stroke = strokes[i];
+  const { outline, stages } = inkStages(stroke, inkOptions, withinStroke(stroke, t) ? t : Infinity);
+
+  return (
+    <div class="stage-counts">
+      {DEBUG_STAGES.map(({ key, label, color }) => (
+        <div class="stage-count" key={key}>
+          <span class="stage-dot" style={`background:${color}`} />
+          <span class="stage-name">{label}</span>
+          <span class="stage-n">{stages[key].length}</span>
+        </div>
+      ))}
+      <div class="stage-count">
+        <span class="stage-dot" style="background:#ef4444" />
+        <span class="stage-name">4 · outline pts</span>
+        <span class="stage-n">{outline.length}</span>
+      </div>
+    </div>
+  );
+}
+
+function LayerToggle({ k, label, color, debug, onChange }: {
+  k: keyof DebugLayers;
+  label: string;
+  color: string;
+  debug: DebugLayers;
+  onChange: (next: DebugLayers) => void;
+}) {
+  return (
+    <label class="debug-layer">
+      <input
+        type="checkbox"
+        checked={debug[k]}
+        onInput={(e) => onChange({ ...debug, [k]: (e.target as HTMLInputElement).checked })}
+      />
+      <span class="stage-dot" style={`background:${color}`} />
+      {label}
+    </label>
+  );
+}
 
 export function CurvePanel() {
   const { strategies, setStrategies: onChange, debug, setDebug: onDebugChange } = useApp();
@@ -51,18 +100,20 @@ export function CurvePanel() {
                 />
               )}
             </div>
+            {/* Pipeline stages first, in the order they run, then the derived
+                geometry. Same order as the counts below them. */}
             {def.id === 'debug' && state.enabled && (
               <div class="debug-layers">
-                {DEBUG_LAYERS.map(({ key, label }) => (
-                  <label class="debug-layer" key={key}>
-                    <input
-                      type="checkbox"
-                      checked={debug[key]}
-                      onInput={(e) => onDebugChange({ ...debug, [key]: (e.target as HTMLInputElement).checked })}
-                    />
-                    {label}
-                  </label>
+                {DEBUG_STAGES.map(({ key, label, color }) => (
+                  <LayerToggle key={key} k={key} label={label} color={color}
+                    debug={debug} onChange={onDebugChange} />
                 ))}
+                <div class="debug-sep" />
+                {DEBUG_EXTRAS.map(({ key, label, color }) => (
+                  <LayerToggle key={key} k={key} label={label} color={color}
+                    debug={debug} onChange={onDebugChange} />
+                ))}
+                <StageCounts />
               </div>
             )}
           </div>

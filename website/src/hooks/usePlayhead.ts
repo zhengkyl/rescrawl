@@ -24,12 +24,12 @@ export function usePlayhead() {
   const timerRef = useRef<number | null>(null); // the idle cap, only non-null during recording
   const penRef = useRef<Pen | null>(null); // null when not recording
 
-  function now(): number {
-    return nowFromTs(performance.now());
+  function getElapsed(): number {
+    return getElapsedFromTs(performance.now());
   }
   // time relative to origin
-  function nowFromTs(ts: number): number {
-    return Math.round(ts - originRef.current!);
+  function getElapsedFromTs(ts: number): number {
+    return ts - originRef.current!;
   }
 
   function cancelRaf() {
@@ -70,7 +70,7 @@ export function usePlayhead() {
 
     setMode("playing");
     const frame = () => {
-      const newElapsed = now();
+      const newElapsed = getElapsed();
       if (newElapsed < duration.value) {
         elapsed.value = newElapsed;
         rafRef.current = requestAnimationFrame(frame);
@@ -88,7 +88,7 @@ export function usePlayhead() {
 
     setMode("recording");
     const frame = () => {
-      elapsed.value = now();
+      elapsed.value = getElapsed();
       rafRef.current = requestAnimationFrame(frame);
     };
     rafRef.current = requestAnimationFrame(frame);
@@ -116,7 +116,7 @@ export function usePlayhead() {
     const pen = penRef.current;
     if (pen === null) return 0;
     if (pen.down) return 1;
-    return clamp01(1 - (now() - pen.since) / LIVE_TIMEOUT);
+    return clamp01(1 - (getElapsed() - pen.since) / LIVE_TIMEOUT);
   }
 
   useEffect(
@@ -130,8 +130,8 @@ export function usePlayhead() {
   return {
     elapsed,
     duration,
-    now,
-    nowFromTs,
+    getElapsed,
+    getElapsedFromTs,
     isIdle: mode === "idle",
     isPlaying: mode === "playing",
     isRecording: mode === "recording",

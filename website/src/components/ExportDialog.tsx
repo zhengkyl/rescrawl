@@ -1,12 +1,23 @@
-import { useRef, useEffect, useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useApp } from '../context';
 import { INK_COLOR, renderInk } from '../curves';
 import { useCanvasView } from '../hooks/useCanvasView';
 import { useStrokes } from '../strokeStore';
-import { countPoints, reframe, serialize, simplifyStrokes, strokesBounds } from '../utils';
+import { countPoints, reframe, serialize, strokesBounds } from '../utils';
 import { drawLine } from './strokeRender';
 
 const DEFAULT_PADDING = 40;
+
+type Format = 'scrawl';
+const FORMATS: { id: Format; label: string; ext: string; mime: string; hint: string }[] = [
+  {
+    id: 'scrawl',
+    label: '.scrawl',
+    ext: 'scrawl',
+    mime: 'text/plain',
+    hint: 'the points — re-importable, and exactly what the canvas renders',
+  },
+];
 
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -16,32 +27,36 @@ function formatBytes(n: number): string {
 
 export function ExportDialog() {
   const { inkOptions, setExportOpen } = useApp();
-  const strokes = useStrokes().strokes.value;
+  const store = useStrokes();
+  const captured = store.strokes.value;
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const [format, setFormat] = useState<Format>('scrawl');
   const [filename, setFilename] = useState('');
   const [padding, setPadding] = useState(DEFAULT_PADDING);
-  const [simplify, setSimplify] = useState(0);
   const [relative, setRelative] = useState(false);
 
   // Preview camera: left-drag pans (button 0) since there's no drawing here.
   const view = useCanvasView(0);
+  const spec = FORMATS.find((f) => f.id === format)!;
 
-  // Simplify drives both the preview and the exported file, so derive once.
-  const simplified = useMemo(() => simplifyStrokes(strokes, simplify), [strokes, simplify]);
-  const bounds = strokesBounds(simplified);
-  const text = useMemo(() => {
-    const effective = reframe(simplified, padding);
-    return serialize(effective, { relative });
-  }, [simplified, padding, relative]);
+  const stored = captured;
+  const bounds = strokesBounds(stored);
+
+  const scrawlText = useMemo(
+    () => serialize(reframe(stored, padding), { relative }),
+    [stored, padding, relative],
+  );
+
+  const text = scrawlText;
   const fileSize = useMemo(() => new TextEncoder().encode(text).length, [text]);
 
   const onClose = () => setExportOpen(false);
 
   function handleExport(name: string) {
-    const blob = new Blob([text], { type: 'text/plain' });
+    const blob = new Blob([text], { type: spec.mime });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = name + '.scrawl';
+    a.download = `${name}.${spec.ext}`;
     a.click();
     URL.revokeObjectURL(a.href);
     onClose();
@@ -65,11 +80,14 @@ export function ExportDialog() {
     <dialog ref={dialogRef} onClose={onClose}>
       <form class="export-form" onSubmit={handleSubmit}>
         <div class="dialog-field">
-          <label>Preview <span class="preview-hint">scroll to zoom · drag to pan</span></label>
+          <label>
+            Preview
+            <span class="preview-hint">scroll to zoom · drag to pan</span>
+          </label>
           <div class="preview-wrap">
             <svg ref={view.svgRef} class="export-preview">
               <g transform={view.transform}>
-                {simplified.map((s, i) => drawLine(renderInk(s, inkOptions, Infinity), i, INK_COLOR))}
+                {stored.map((s, i) => drawLine(renderInk(s, inkOptions, Infinity), i, INK_COLOR))}
                 {bounds && (
                   <rect
                     x={bounds.minX - padding}
@@ -89,6 +107,24 @@ export function ExportDialog() {
             </button>
           </div>
         </div>
+
+        <div class="dialog-field">
+          <label>Format</label>
+          <div class="format-row">
+            {FORMATS.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                class={`format-btn${format === f.id ? ' on' : ''}`}
+                onClick={() => setFormat(f.id)}
+              >
+                {f.label}
+              </button>
+            ))}
+            <span class="format-hint">{spec.hint}</span>
+          </div>
+        </div>
+
         <div class="dialog-field">
           <label for="export-filename">Filename</label>
           <input
@@ -110,30 +146,19 @@ export function ExportDialog() {
             onInput={(e) => setPadding(+(e.target as HTMLInputElement).value)}
           />
         </div>
-        <div class="dialog-field">
-          <label for="export-simplify">
-            Simplify
-            <span class="field-value">{simplify.toFixed(2)} px</span>
-          </label>
-          <input
-            type="range"
-            id="export-simplify"
-            min={0}
-            max={5}
-            step={0.05}
-            value={simplify}
-            onInput={(e) => setSimplify(+(e.target as HTMLInputElement).value)}
-          />
-        </div>
-        <div class="dialog-field export-size">
-          <span>{countPoints(simplified).toLocaleString()} points{simplify > 0 && ` (of ${countPoints(strokes).toLocaleString()})`}</span>
-          <span class="field-value">{formatBytes(fileSize)}</span>
-        </div>
+
         <div class="dialog-field">
           <label>
             <input type="checkbox" id="export-relative" checked={relative} onChange={(e) => setRelative((e.target as HTMLInputElement).checked)} />
             {' '}All points relative (smaller; not re-importable)
           </label>
+        </div>
+
+        <div class="dialog-field export-size">
+          <span>
+            {countPoints(stored).toLocaleString()} points
+          </span>
+          <span class="field-value">{formatBytes(fileSize)}</span>
         </div>
         <div class="dialog-actions">
           <button type="button" id="export-cancel" onClick={onClose}>Cancel</button>

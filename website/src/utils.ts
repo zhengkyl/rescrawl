@@ -1,5 +1,3 @@
-import { simplifyStroke } from "rescrawl";
-
 export type Point = { x: number; y: number; t: number };
 // Invariant: a *stored* stroke always holds at least one point — recording
 // commits >= 2 (pen-down + release), import yields >= 1 per line, and every edit
@@ -59,17 +57,10 @@ export function strokesBounds(strokes: Stroke[]): Bounds | null {
 export function reframe(strokes: Stroke[], pad: number): Stroke[] {
   const b = strokesBounds(strokes);
   if (!b) return strokes;
-  const dx = pad - b.minX,
-    dy = pad - b.minY;
+  const k = Math.pow(10, POS_DIGITS);
+  const dx = Math.round((pad - b.minX) * k) / k,
+    dy = Math.round((pad - b.minY) * k) / k;
   return strokes.map((stroke) => stroke.map((pt) => ({ ...pt, x: pt.x + dx, y: pt.y + dy })));
-}
-
-// --- Simplification ---
-// Reduce stored point count (and file size) using rescrawl's own simplify logic,
-// so export matches what the renderer's `simplify` option does.
-export function simplifyStrokes(strokes: Stroke[], eps: number): Stroke[] {
-  if (eps <= 0) return strokes;
-  return strokes.map((s) => simplifyStroke(s, eps));
 }
 
 export function countPoints(strokes: Stroke[]): number {
@@ -80,7 +71,7 @@ export function countPoints(strokes: Stroke[]): number {
 // t <= `t`, plus an interpolated head sitting exactly where the raw pen was at
 // `t`. `Infinity` returns the whole stroke; a time before the stroke starts
 // returns nothing. This is the single bridge between the timeline and geometry.
-export function drawnPoints(stroke: Stroke, t: number): Stroke {
+export function elapsedPoints(stroke: Stroke, t: number): Stroke {
   const n = stroke.length;
   if (t < stroke[0].t) return [];
   if (t >= stroke[n - 1].t) return stroke;
@@ -88,17 +79,20 @@ export function drawnPoints(stroke: Stroke, t: number): Stroke {
   while (i < n - 1 && stroke[i + 1].t <= t) i++;
   const a = stroke[i],
     b = stroke[i + 1];
-  const f = (t - a.t) / (b.t - a.t);
-  if (f <= 0) return stroke.slice(0, i + 1);
+  // TODO stroke is not ordered? remove when ordered
+  const f = Math.max((t - a.t) / (b.t - a.t), 0);
   const head: Point = {
     x: a.x + (b.x - a.x) * f,
     y: a.y + (b.y - a.y) * f,
     t,
   };
-  return [...stroke.slice(0, i + 1), head];
+  return [...stroke.slice(0, i + 1), head, { ...head }];
 }
 
 // --- Serialization ---
+const POS_DIGITS = 1;
+const TIME_DIGITS = 0;
+
 // Strokes are newline-separated; points within a stroke are ";"-separated. A
 // point is "x,y,t". By default the first point of each stroke is absolute and
 // the rest are deltas from the previous point.
@@ -108,15 +102,17 @@ export function drawnPoints(stroke: Stroke, t: number): Stroke {
 //              longer recoverable independently) — for size experiments only.
 export function serialize(strokes: Stroke[], opts: { relative?: boolean } = {}): string {
   const { relative = false } = opts;
+  const pk = Math.pow(10, POS_DIGITS);
+  const tk = Math.pow(10, TIME_DIGITS);
   let prev: Point | null = null;
   return strokes
     .map((stroke) => {
       const line = stroke
         .map((pt, i) => {
           const ref = i === 0 ? (relative ? prev : null) : stroke[i - 1];
-          const x = pt.x - (ref?.x ?? 0);
-          const y = pt.y - (ref?.y ?? 0);
-          const t = pt.t - (ref?.t ?? 0);
+          const x = Math.round((pt.x - (ref?.x ?? 0)) * pk) / pk;
+          const y = Math.round((pt.y - (ref?.y ?? 0)) * pk) / pk;
+          const t = Math.round((pt.t - (ref?.t ?? 0)) * tk) / tk;
           return `${x},${y},${t}`;
         })
         .join(";");
@@ -126,7 +122,24 @@ export function serialize(strokes: Stroke[], opts: { relative?: boolean } = {}):
     .join("\n");
 }
 
+// The file's own grid, read off the file: the finest decimal any field is
+// written to. Nothing declares it in a header, but every number in the file was
+// produced by rounding to it, so the widest tail present is it.
+function decimalsIn(text: string): number {
+  let max = 0;
+  for (const m of text.matchAll(/\.(\d+)/g)) if (m[1].length > max) max = m[1].length;
+  return Math.min(max, 6);
+}
+
+// Deltas accumulate, and summing rounded decimals in binary drifts off the grid
+// they were written on — 0.1 + 0.2 is 0.30000000000000004. Stage 0 snaps that
+// straight back, so the drift never reaches the ink; the reason to head it off
+// anyway is everything that reads a stored point WITHOUT going through the
+// pipeline — bounds, the playhead's interpolation, re-serializing on the next
+// export. Accumulating in whole grid units and dividing once at the end makes
+// the points come back exactly as they were written.
 export function deserialize(text: string): Stroke[] {
+  const k = Math.pow(10, decimalsIn(text));
   return text
     .split("\n")
     .filter((line) => line.trim() !== "")
@@ -136,7 +149,7 @@ export function deserialize(text: string): Stroke[] {
         y = 0,
         t = 0;
       line.split(";").forEach((token, i) => {
-        const parts = token.split(",").map(Number);
+        const parts = token.split(",").map((n) => Math.round(Number(n) * k));
         if (i === 0) {
           [x, y, t] = parts;
         } else {
@@ -144,7 +157,7 @@ export function deserialize(text: string): Stroke[] {
           y += parts[1];
           t += parts[2];
         }
-        stroke.push({ x, y, t });
+        stroke.push({ x: x / k, y: y / k, t: t / k });
       });
       return stroke;
     });

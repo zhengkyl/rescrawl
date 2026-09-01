@@ -3,7 +3,8 @@
 	"private": true,
 	"packageManager": "pnpm@10.28.0",
 	"scripts": {
-		"dev": "pnpm --filter website dev"
+		"dev": "pnpm --filter website dev",
+		"lab": "pnpm --filter lab dev"
 	},
 	"devDependencies": {
 		"oxfmt": "^0.62.0"

@@ -12,6 +12,19 @@ importers:
         specifier: ^0.62.0
         version: 0.62.0
 
+  lab:
+    dependencies:
+      rescrawl:
+        specifier: workspace:*
+        version: link:../rescrawl
+    devDependencies:
+      typescript:
+        specifier: ^6.0.2
+        version: 6.0.2
+      vite:
+        specifier: ^7.3.1
+        version: 7.3.1
+
   rescrawl:
     devDependencies:
       typescript:

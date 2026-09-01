@@ -58,8 +58,8 @@ export function useCanvasView(panButton = 1) {
   function svgToContent(clientX: number, clientY: number): { x: number; y: number } {
     const rect = viewportRect();
     return {
-      x: Math.round((clientX - rect.left - panX.value) / zoom.value),
-      y: Math.round((clientY - rect.top - panY.value) / zoom.value),
+      x: (clientX - rect.left - panX.value) / zoom.value,
+      y: (clientY - rect.top - panY.value) / zoom.value,
     };
   }
 

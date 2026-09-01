@@ -2,8 +2,8 @@ import type { ReadonlySignal, Signal } from '@preact/signals';
 import { computed, useSignal } from '@preact/signals';
 import { useEffect, useMemo, useRef } from 'preact/hooks';
 import { useApp } from '../context';
-import type { ActiveStrategy, DebugLayers, InkOptions } from '../curves';
-import { getActiveStrategies, INK_COLOR, inkDebug, renderInk, STRATEGY_DEFS } from '../curves';
+import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from '../curves';
+import { DEBUG_STAGES, getActiveStrategies, hasRadiusLayer, INK_COLOR, inkStages, pickStagePoint, renderInk, STRATEGY_DEFS, strokeStages } from '../curves';
 import { useStrokeCache } from '../hooks/useStrokeCache';
 import { useStrokes } from '../strokeStore';
 import type { Stroke } from '../utils';
@@ -11,11 +11,7 @@ import { activeStrokeAt, strokeEnd, withinStroke } from '../utils';
 import { drawLine } from './strokeRender';
 
 const INK_CHUNK = 128; // strokes per settled band
-
-// Threshold between pointermove events before record as hold
-const MIN_HOLD_MS = 100;
-// Best guess of pointermove timespan after a hold: 16ms / 2
-const TRAVEL_MS = 8;
+const HOVER_PX = 14; // how close, in screen px, the cursor must come to read a radius
 
 type InkCache = ReturnType<typeof useStrokeCache>;
 
@@ -95,19 +91,80 @@ function ActiveHighlight({ strokes, elapsed, isIdle, primary }: {
   return <g>{drawLine(primary.def.render(strokes[active], primary.param, drawTime), 'active', '#4f8ef7')}</g>;
 }
 
-// Debug overlay for one ink stroke, each layer independently toggleable: the
-// cubic centerline (blue), a marker at every outline (offset) point (red), and
-// the raw recorded input positions the curve is fitted to (green, hollow).
+// The stage point under the cursor, plus where the cursor was (in viewport px,
+// which is what the label is positioned in).
+type HoverPick = StagePick & { sx: number; sy: number };
+
+// True if any raw sample of `s` is within `pad` of the cursor. The cheap reject
+// in front of the hover hit test: a move over empty canvas costs a scan of
+// coordinates instead of a run of the pipeline.
+function nearCursor(s: Stroke, x: number, y: number, pad: number): boolean {
+  for (const p of s) if (Math.abs(p.x - x) < pad && Math.abs(p.y - y) < pad) return true;
+  return false;
+}
+
+// The picked circle, redrawn heavy in its stage's colour, plus a dot at its
+// centre — a zero-length round-capped path, so the dot stays the same size on
+// screen at any zoom while the ring tracks the real radius. Inside the canvas
+// transform. Reads the signal, so a hover repaints this alone.
+function HoverRing({ hover }: { hover: Signal<HoverPick | null> }) {
+  const h = hover.value;
+  if (h === null) return null;
+  return (
+    <g>
+      <circle cx={h.x} cy={h.y} r={h.r} fill="none" stroke={h.color}
+        stroke-width="2.5" vector-effect="non-scaling-stroke" />
+      <path d={`M${h.x} ${h.y}h0`} stroke={h.color} stroke-width="5"
+        stroke-linecap="round" vector-effect="non-scaling-stroke" />
+    </g>
+  );
+}
+
+// The readout itself: radius and the gap to the next point of that stage, over
+// the stage it came from. Outside the canvas transform, so
+// it stays 13px whatever the zoom, and haloed rather than boxed so it reads over
+// both white paper and dark ink.
+function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
+  const h = hover.value;
+  if (h === null) return null;
+  const halo = { stroke: 'rgba(0,0,0,0.85)', 'stroke-width': 3, 'paint-order': 'stroke', 'stroke-linejoin': 'round' } as const;
+  // Sits above the cursor, except near the top edge, where there is no room.
+  const below = h.sy < 34;
+  return (
+    <g transform={`translate(${h.sx},${h.sy})`}>
+      <text x="14" y={below ? 20 : -15} font-size="13" fill="#fff" {...halo}>
+        {`r ${h.r.toFixed(2)} · dt ${h.dt.toFixed(1)}ms`}
+      </text>
+      <text x="14" y={below ? 34 : -1} font-size="11" fill={h.color} {...halo}>{h.label}</text>
+    </g>
+  );
+}
+
+// Debug overlay for one ink stroke. Each pipeline stage is its own circle layer:
+// the two stages before a radius exists are fixed-size dots, nested largest-first
+// so they don't hide each other, and every stage after draws each point at its
+// own radius — see DEBUG_STAGES for the order and colours. On top of those:
+// hollow circles at the final radii (what the outline is actually wrapped
+// around), the centerline curve, and a marker at every outline contact point.
 function drawDebug(stroke: Stroke, options: InkOptions, t: number, key: string | number, layers: DebugLayers) {
-  const { curve, points, dots } = inkDebug(stroke, options, t);
+  const { curve, spline, outline, stages } = inkStages(stroke, options, t);
   return (
     <g key={key}>
-      {layers.centerline && <path d={curve} stroke="#3b82f6" stroke-width="1" fill="none" vector-effect="non-scaling-stroke" />}
-      {layers.offsets && points.map((p, j) => <circle key={`o${j}`} cx={p.x} cy={p.y} r="1.2" fill="#ef4444" />)}
-      {layers.dots && dots.map((p, j) => (
-        <circle key={`d${j}`} cx={p.x} cy={p.y} r="2.5" fill="none"
-          stroke="#10b981" stroke-width="1" vector-effect="non-scaling-stroke" />
+      {layers.circles && stages.simplified.map((p, j) => (
+        <circle key={`c${j}`} cx={p.x} cy={p.y} r={p.r} fill="none"
+          stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.5" vector-effect="non-scaling-stroke" />
       ))}
+      {layers.centerline && <path d={curve} stroke="#3b82f6" stroke-width="1" fill="none" vector-effect="non-scaling-stroke" />}
+      {layers.splineCurve && <path d={spline} stroke="#06b6d4" stroke-width="1" fill="none" vector-effect="non-scaling-stroke" />}
+      {DEBUG_STAGES.map(({ key: k, color, dot }) => layers[k] && (
+        <g key={k}>
+          {stages[k].map((p, j) => (
+            <circle key={j} cx={p.x} cy={p.y} r={'r' in p ? p.r : dot} fill="none"
+              stroke={color} stroke-width="1" vector-effect="non-scaling-stroke" />
+          ))}
+        </g>
+      ))}
+      {layers.outline && outline.map((p, j) => <circle key={`o${j}`} cx={p.x} cy={p.y} r="1.2" fill="#ef4444" />)}
     </g>
   );
 }
@@ -201,6 +258,10 @@ export function App() {
   const drawLoopRef = useRef<number | null>(null);
   const livePoints = useSignal<Stroke | null>(null);
 
+  // Radius readout: the stage point under the cursor. A signal, so tracking the
+  // pointer re-renders the ring and the label alone rather than the canvas.
+  const hover = useSignal<HoverPick | null>(null);
+
   // Stop the draw loop if we unmount mid-stroke.
   useEffect(() => () => { if (drawLoopRef.current !== null) cancelAnimationFrame(drawLoopRef.current); }, []);
 
@@ -219,7 +280,8 @@ export function App() {
     }
 
     const pt = view.svgToContent(e.clientX, e.clientY);
-    const now = clock.nowFromTs(e.timeStamp)
+    const now = clock.getElapsedFromTs(e.timeStamp)
+    hover.value = null;
     clock.penDown(now);
     currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: now }];
     drawFrame(); // renders the live stroke + starts the dwell loop
@@ -231,26 +293,20 @@ export function App() {
     const rec = currentStrokeRef.current;
     if (rec === null) { drawLoopRef.current = null; return; }
     const last = rec[rec.length - 1];
-    livePoints.value = [...rec, { x: last.x, y: last.y, t: clock.now() }];
+    livePoints.value = [...rec, { x: last.x, y: last.y, t: clock.getElapsed() }];
     drawLoopRef.current = requestAnimationFrame(drawFrame);
   }
 
   function handlePointerMove(e: PointerEvent) {
     const rec = currentStrokeRef.current;
-    if (rec === null) return;
+    if (rec === null) { updateHover(e); return; }
 
     const pt = view.svgToContent(e.clientX, e.clientY);
     const last = rec[rec.length - 1];
-    // some pens report non movement, ignore to use same hold logic as mouse
+    // ignore non-movement updates (e.g. pens)
     if (pt.x === last.x && pt.y === last.y) return;
 
-    // split gap since last point into hold, then move
-    const t = clock.nowFromTs(e.timeStamp);
-    const moveStart = t - TRAVEL_MS
-    if (moveStart - last.t >= MIN_HOLD_MS) {
-      rec.push({ x: last.x, y: last.y, t: moveStart });
-    }
-
+    const t = clock.getElapsedFromTs(e.timeStamp);
     rec.push({ x: pt.x, y: pt.y, t });
   }
 
@@ -260,7 +316,7 @@ export function App() {
     if (drawLoopRef.current !== null) { cancelAnimationFrame(drawLoopRef.current); drawLoopRef.current = null; }
     // Capture the pointer-up point (final position + release time) so every
     // stroke has >= 2 points and the end dwell is recorded.
-    const now = clock.nowFromTs(e.timeStamp)
+    const now = clock.getElapsedFromTs(e.timeStamp)
 
     const last = rec[rec.length - 1];
     const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: now }];
@@ -270,11 +326,50 @@ export function App() {
     clock.penUp(now);
   }
 
+  // --- Radius readout ---
+
+  // With the debug overlay up, the stage circle nearest the cursor reports its
+  // radius. Hit-tested in JS rather than off the DOM: the overlay is
+  // `pointer-events: none` (see style.css) so the browser never hit-tests the
+  // thousands of circles it draws, and picking the nearest CENTRE reads a
+  // stack of nested circles better than picking whatever is painted on top.
+  function updateHover(e: PointerEvent) {
+    if (!hoverOn) return;
+    const { x, y } = view.svgToContent(e.clientX, e.clientY);
+    const t = clock.elapsed.peek();
+    // The overlay's stages are recomputed here rather than cached, exactly as
+    // the overlay itself does — one pipeline run per stroke that passes the
+    // reject below, which in practice is the one under the cursor.
+    let reach = HOVER_PX / view.zoom.peek();
+    const pad = reach + inkOptions.maxWidth;
+    const rect = view.svgRef.current!.getBoundingClientRect();
+    let best: HoverPick | null = null;
+    for (const s of strokes) {
+      if (s[0].t > t || !nearCursor(s, x, y, pad)) continue;
+      const hit = pickStagePoint(strokeStages(s, inkOptions, t), debug, x, y, reach);
+      if (hit === null) continue;
+      // Every later stroke now has to beat this one to take the readout.
+      reach = hit.d;
+      best = { ...hit, sx: e.clientX - rect.left, sy: e.clientY - rect.top };
+    }
+    hover.value = best;
+  }
+
   // --- Derived render data ---
 
+  // The document, not the capture: what is drawn is what a file would hold.
   const strokes = store.strokes.value;
   const activeStrategies = useMemo(() => getActiveStrategies(strategies), [strategies]);
   const primaryStrategy: ActiveStrategy = activeStrategies[0] ?? { def: STRATEGY_DEFS[0], param: 0 };
+
+  // The readout only exists where its circles do: debug overlay on, and at least
+  // one layer that carries a radius. Anything that can move the ink out from
+  // under a parked cursor (playback, or the layers going away) drops it, since
+  // nothing else will fire until the pointer moves again.
+  const hoverOn = activeStrategies.some(({ def }) => def.id === 'debug') && hasRadiusLayer(debug);
+  useEffect(() => {
+    if (!hoverOn || clock.isPlaying) hover.value = null;
+  }, [hoverOn, clock.isPlaying]);
 
   // Ink is the always-on base layer; reference curves draw on top. Geometry is
   // cached per stroke (keyed by identity) so it's computed once, not per frame.
@@ -316,6 +411,7 @@ export function App() {
       onPointerMove={handlePointerMove}
       onPointerUp={commitStroke}
       onPointerCancel={commitStroke}
+      onPointerLeave={() => { hover.value = null; }}
       // stylus long press
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -337,7 +433,11 @@ export function App() {
         {/* In-progress stroke */}
         <LiveStroke points={livePoints} inkOptions={inkOptions}
           strategies={activeStrategies} debug={debug} />
+
+        {/* Radius readout: the ring rides the canvas, the label rides the cursor */}
+        <HoverRing hover={hover} />
       </g>
+      <HoverLabel hover={hover} />
     </svg>
   );
 }

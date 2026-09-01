@@ -435,10 +435,11 @@ button:disabled {
   border-color: #4f8ef7;
 }
 
+/* One per row, in pipeline order — the list itself is the diagram. */
 .debug-layers {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
+  flex-direction: column;
+  gap: 3px;
   padding: 6px 2px 2px 8px;
 }
 .debug-layer {
@@ -450,6 +451,53 @@ button:disabled {
   cursor: pointer;
 }
 .debug-layer input[type="checkbox"] {
+  accent-color: #4f8ef7;
+}
+.debug-sep {
+  height: 1px;
+  margin: 3px 0;
+  background: #333;
+}
+.stage-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.stage-counts {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #333;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #888;
+}
+.stage-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.stage-count .stage-name {
+  flex: 1 1 auto;
+}
+.stage-count .stage-n {
+  font-variant-numeric: tabular-nums;
+  color: #ccc;
+}
+
+.ink-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 11px;
+  color: #aaa;
+  cursor: pointer;
+}
+.ink-toggle input[type="checkbox"] {
   accent-color: #4f8ef7;
 }
 
@@ -582,6 +630,44 @@ dialog::backdrop {
   border-radius: 4px;
   touch-action: none;
   cursor: grab;
+}
+.svg-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  overflow: hidden;
+}
+.svg-preview img {
+  max-width: 100%;
+  max-height: 100%;
+}
+.format-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.format-btn {
+  font-size: 13px;
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #1a1a1a;
+  color: #999;
+  font-family: inherit;
+}
+.format-btn:hover {
+  color: #eee;
+}
+.format-btn.on {
+  border-color: #4f8ef7;
+  color: #fff;
+  background: #23324a;
+}
+.format-hint {
+  color: #666;
+  font-size: 11px;
+  margin-left: 4px;
 }
 .dialog-field input[type="range"] {
   width: 100%;
