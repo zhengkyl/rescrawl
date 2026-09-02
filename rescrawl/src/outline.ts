@@ -22,18 +22,13 @@ function pushSweep(out: Contact[], c: Point4, from: number, to: number): void {
   for (let k = 1; k < steps; k++) out.push(contactAt(c, from + (span * k) / steps));
 }
 
-// NEXT TASK
-// This strat fixes backtrack collapse, but adds extra points for small turns if tangents cross
-// potential solution by checking dot product of in/out
-// or check angle on both left and right?
-// does backtrack only collapse when both negative?
 function pushSweep2(out: Contact[], c: Point4, from: number, to: number): void {
   const span = wrapZeroTau(to - from);
   const steps = Math.ceil(span / MAX_CURVE_ANGLE);
   for (let k = 0; k <= steps; k++) out.push(contactAt(c, from + (span * k) / steps));
 }
 
-const MAX_CURVE_ANGLE = Math.PI;
+const MAX_CURVE_ANGLE = Math.PI / 4;
 
 export function toOutline(pts: Point4[]): Contact[] {
   const n = pts.length;
@@ -48,10 +43,7 @@ export function toOutline(pts: Point4[]): Contact[] {
 
   // y increases downwards, so unit circle is flipped vertically
   // angles increase clockwise
-  //
-  //
 
-  // Per segment: the direction through the two centres, and the external tangent angle off it
   // `dropContained` ensures |dr| <= d
   const thru = new Array<number>(n - 1);
   const off = new Array<number>(n - 1);
@@ -63,38 +55,30 @@ export function toOutline(pts: Point4[]): Contact[] {
     off[i] = Math.acos(clamp11(d > 0 ? (a.r - b.r) / d : 0));
   }
 
-  // Two angles per side per interior point: one from the segment behind, one
-  // from the segment ahead. The ends have only one segment, and `back === fwd`
-  // collapses them to a single contact there.
   const angles = (i: number, side: 1 | -1) => {
     const back = i > 0 ? i - 1 : 0;
     const fwd = i < n - 1 ? i : n - 2;
     return [thru[back] + side * off[back], thru[fwd] + side * off[fwd]] as const;
   };
 
-  // Below this the two contacts are the same point and the join is flat, so the
-  // second contact and its zero-length arc are dropped. ~0.06°, small enough to
-  // be invisible and large enough that a collinear run stays one contact.
-  const FLAT = 1e-3;
-
   const out: Contact[] = [];
 
   for (let i = 0; i < n; i++) {
     const [behind, ahead] = angles(i, -1);
+    const [behind2, ahead2] = angles(i, 1);
 
-    if (i > 0 && i < n - 1) {
-      pushSweep2(out, pts[i], behind, ahead);
-    } else {
+    const outAngle = wrapZeroTau(ahead - behind2);
+    const inAngle = wrapZeroTau(behind - behind2);
+
+    if (i === 0 || i === n - 1) {
       out.push(contactAt(pts[i], behind));
+    } else if (outAngle < inAngle) {
+      // inside of a corner, don't sweep
+      out.push(contactAt(pts[i], behind));
+      out.push(contactAt(pts[i], ahead));
+    } else {
+      pushSweep2(out, pts[i], behind, ahead);
     }
-
-    // out.push(contactAt(pts[i], behind));
-
-    // const turn = wrapZeroTau(ahead - behind);
-    // if (i > 0 && i < n - 1 && Math.abs(turn) > FLAT) {
-    //   if (turn > Math.PI / 2) pushSweep(out, pts[i], behind, ahead);
-    //   out.push(contactAt(pts[i], ahead));
-    // }
   }
 
   // End cap: round the last disc from its left contact to its right one. The
@@ -106,20 +90,19 @@ export function toOutline(pts: Point4[]): Contact[] {
 
   for (let i = n - 1; i >= 0; i--) {
     const [behind, ahead] = angles(i, 1);
+    const [behind2, ahead2] = angles(i, -1);
 
-    if (i > 0 && i < n - 1) {
-      pushSweep2(out, pts[i], ahead, behind);
-    } else {
+    const outAngle = wrapZeroTau(behind - ahead2);
+    const inAngle = wrapZeroTau(ahead - ahead2);
+
+    if (i === 0 || i === n - 1) {
       out.push(contactAt(pts[i], ahead));
+    } else if (outAngle < inAngle) {
+      out.push(contactAt(pts[i], ahead));
+      out.push(contactAt(pts[i], behind));
+    } else {
+      pushSweep2(out, pts[i], ahead, behind);
     }
-
-    // out.push(contactAt(pts[i], ahead));
-
-    // const turn = wrapZeroTau(behind - ahead);
-    // if (i > 0 && i < n - 1 && Math.abs(turn) > FLAT) {
-    //   if (turn > Math.PI / 2) pushSweep(out, pts[i], ahead, behind);
-    //   out.push(contactAt(pts[i], behind));
-    // }
   }
 
   // Start cap: the long way round the first disc, TAU - 2·off, back to the
