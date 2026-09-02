@@ -12,31 +12,31 @@ function wrapZeroTau(a: number) {
   return a - TAU * Math.floor(a / TAU);
 }
 
-// The interior samples of a decreasing sweep from `from` to `to` around one
-// disc — endpoints excluded, since a sweep only ever bridges two contacts that
-// are already in the list. Split so no single cubic spans more than a quarter
-// turn: one cubic per quarter is accurate to ~2.7e-4·r, per half only ~1e-2·r.
-function pushSweep(out: Contact[], c: Point4, from: number, to: number): void {
-  const span = wrapZeroTau(to - from);
-  const steps = Math.ceil(span / MAX_CURVE_ANGLE);
-  for (let k = 1; k < steps; k++) out.push(contactAt(c, from + (span * k) / steps));
-}
-
 function pushSweep2(out: Contact[], c: Point4, from: number, to: number): void {
   const span = wrapZeroTau(to - from);
-  const steps = Math.ceil(span / MAX_CURVE_ANGLE);
-  for (let k = 0; k <= steps; k++) out.push(contactAt(c, from + (span * k) / steps));
+  if (span < MIN_EXTERIOR_ANGLE_PER_BEZIER) {
+    out.push(contactAt(c, from + span / 2));
+    return;
+  }
+
+  const segments = Math.ceil(span / MAX_ANGLE_PER_BEZIER);
+  for (let k = 0; k <= segments; k++) out.push(contactAt(c, from + (span * k) / segments));
 }
 
-const MAX_CURVE_ANGLE = Math.PI / 4;
+// Math.PI (2 cubic approx) has 1.8% error
+// for reference, 3 segment is 0.15%, 4 segment is 0.027%
+const MAX_ANGLE_PER_BEZIER = Math.PI;
+
+const MIN_EXTERIOR_ANGLE_PER_BEZIER = Math.PI / 4;
+const MIN_INTERIOR_ANGLE_PER_BEZIER = Math.PI / 4;
 
 export function toOutline(pts: Point4[]): Contact[] {
   const n = pts.length;
   if (n === 0) return [];
   if (n === 1) {
     const out: Contact[] = [];
-    for (let k = 0; k < TAU / MAX_CURVE_ANGLE; k++) {
-      out.push(contactAt(pts[0], k * MAX_CURVE_ANGLE));
+    for (let k = 0; k < TAU / MAX_ANGLE_PER_BEZIER; k++) {
+      out.push(contactAt(pts[0], k * MAX_ANGLE_PER_BEZIER));
     }
     return out;
   }
@@ -63,19 +63,27 @@ export function toOutline(pts: Point4[]): Contact[] {
 
   const out: Contact[] = [];
 
-  for (let i = 0; i < n; i++) {
+  // Start cap: the long way round the first disc, TAU - 2·off, back to the
+  // contact the loop opened on.
+  pushSweep2(out, pts[0], thru[0] + off[0], thru[0] - off[0]);
+
+  for (let i = 1; i < n - 1; i++) {
     const [behind, ahead] = angles(i, -1);
     const [behind2, ahead2] = angles(i, 1);
 
     const outAngle = wrapZeroTau(ahead - behind2);
     const inAngle = wrapZeroTau(behind - behind2);
 
-    if (i === 0 || i === n - 1) {
-      out.push(contactAt(pts[i], behind));
-    } else if (outAngle < inAngle) {
-      // inside of a corner, don't sweep
-      out.push(contactAt(pts[i], behind));
-      out.push(contactAt(pts[i], ahead));
+    if (outAngle < inAngle) {
+      const gap = inAngle - outAngle;
+      if (gap < MIN_INTERIOR_ANGLE_PER_BEZIER) {
+        // out.push(contactAt(pts[i], behind));
+        out.push(contactAt(pts[i], ahead + gap / 2));
+      } else {
+        // inside of a corner, don't sweep
+        out.push(contactAt(pts[i], behind));
+        out.push(contactAt(pts[i], ahead));
+      }
     } else {
       pushSweep2(out, pts[i], behind, ahead);
     }
@@ -86,28 +94,28 @@ export function toOutline(pts: Point4[]): Contact[] {
   // between them by construction.
   const endL = thru[n - 2] - off[n - 2];
   const endR = thru[n - 2] + off[n - 2];
-  pushSweep(out, pts[n - 1], endL, endR);
+  pushSweep2(out, pts[n - 1], endL, endR);
 
-  for (let i = n - 1; i >= 0; i--) {
+  for (let i = n - 2; i >= 1; i--) {
     const [behind, ahead] = angles(i, 1);
     const [behind2, ahead2] = angles(i, -1);
 
     const outAngle = wrapZeroTau(behind - ahead2);
     const inAngle = wrapZeroTau(ahead - ahead2);
 
-    if (i === 0 || i === n - 1) {
-      out.push(contactAt(pts[i], ahead));
-    } else if (outAngle < inAngle) {
-      out.push(contactAt(pts[i], ahead));
-      out.push(contactAt(pts[i], behind));
+    if (outAngle < inAngle) {
+      const gap = inAngle - outAngle;
+      if (gap < MIN_INTERIOR_ANGLE_PER_BEZIER) {
+        out.push(contactAt(pts[i], behind + gap / 2));
+      } else {
+        out.push(contactAt(pts[i], ahead));
+        out.push(contactAt(pts[i], behind));
+      }
     } else {
       pushSweep2(out, pts[i], ahead, behind);
     }
   }
 
-  // Start cap: the long way round the first disc, TAU - 2·off, back to the
-  // contact the loop opened on.
-  pushSweep(out, pts[0], thru[0] + off[0], thru[0] - off[0]);
   return out;
 }
 
