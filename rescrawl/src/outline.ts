@@ -1,6 +1,6 @@
 import { clamp11, dist, TAU } from "./math";
 import { hermiteMag } from "./svg";
-import type { Contact, Point4, Sample } from "./types";
+import type { Contact, Point4 } from "./types";
 
 function contactAt(c: Point4, a: number): Contact {
   const cos = Math.cos(a),
@@ -251,8 +251,4 @@ export function toOutlineTension(pts: Point4[], o: TensionOptions = TENSION_DEFA
     c.m = chord + (corner - chord) * w;
   }
   return out;
-}
-
-export function offsetOutline(samples: Sample[]): Contact[] {
-  return [];
 }

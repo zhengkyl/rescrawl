@@ -39,7 +39,7 @@ export type StrategiesState = Record<string, StrategyState>;
 // are derived geometry.
 export type StageKey = keyof StrokeStages;
 export type DebugLayers = Record<
-  StageKey | "circles" | "centerline" | "splineCurve" | "outline",
+  StageKey | "circles" | "centerline" | "outline",
   boolean
 >;
 
@@ -56,18 +56,16 @@ export const DEBUG_STAGES: StageLayer[] = [
   { key: "smoothed", label: "2 · smoothed", color: "#f97316" },
   { key: "distinct", label: "3a · distinct", color: "#a855f7" },
   { key: "simplified", label: "3b · simplified", color: "#3b82f6" },
-  { key: "spline", label: "3c · spline", color: "#06b6d4" },
 ];
 
 export type ExtraLayer = {
-  key: "circles" | "centerline" | "splineCurve" | "outline";
+  key: "circles" | "centerline" | "outline";
   label: string;
   color: string;
 };
 export const DEBUG_EXTRAS: ExtraLayer[] = [
   { key: "circles", label: "radius circles", color: "#3b82f6" },
   { key: "centerline", label: "centerline", color: "#3b82f6" },
-  { key: "splineCurve", label: "centre spline", color: "#06b6d4" },
   { key: "outline", label: "4 · outline pts", color: "#ef4444" },
 ];
 
@@ -144,10 +142,8 @@ export const DEBUG_DEFAULTS: DebugLayers = {
   smoothed: false,
   distinct: false,
   simplified: true,
-  spline: false,
   circles: false,
   centerline: true,
-  splineCurve: false,
   outline: false,
 };
 
@@ -242,18 +238,10 @@ export function inkStages(
   stroke: Stroke,
   options: InkOptions,
   t: number,
-): { curve: string; spline: string; outline: Contact[]; stages: StrokeStages } {
+): { curve: string; outline: Contact[]; stages: StrokeStages } {
   const pts = elapsedPoints(stroke, t);
   const { centerline, outline, stages } = renderStages(pts, options);
-  return {
-    curve: centerlinePath(centerline),
-    // Straight segments between samples: at a few px apart the polyline IS the
-    // spline to within a hair, and drawing it as one shows where the samples
-    // actually landed.
-    spline: centerlinePath(stages.spline),
-    outline,
-    stages,
-  };
+  return { curve: centerlinePath(centerline), outline, stages };
 }
 
 // Just the stages of one stroke as of `t` — the same pipeline run `inkStages`
@@ -287,11 +275,6 @@ export const INK_CONTROLS: InkControl[] = [
   // How far the ink may move when a point is dropped, as a fraction of the local
   // radius. 0 is lossless and drops almost nothing.
   { key: "simplifyTol", label: "simplify tol (xr)", min: 0, max: 1, step: 0.01 },
-  // Sampling is adaptive, so this is an error budget rather than a density: how
-  // far the outline may stray between two samples. The spline is always sampled
-  // so the debug layers have something to draw; `splineOutline` below is what
-  // decides whether the ink uses it.
-  { key: "splineTol", label: "spline tol (px)", min: 0.01, max: 2, step: 0.01 },
   // Tension outline only (see `toOutlineTension`). `cornerAngle` is where the
   // contact magnitude is halfway from the chord rule to the corner rule;
   // `maxTurn` is where it gives up and falls back to the tangent construction.
@@ -303,7 +286,6 @@ export const INK_CONTROLS: InkControl[] = [
 // Ink options that are on/off rather than a range.
 export type InkToggle = { key: BooleanKeys<InkOptions>; label: string };
 export const INK_TOGGLES: InkToggle[] = [
-  { key: "splineOutline", label: "outline from spline" },
   { key: "tensionOutline", label: "tension outline" },
   { key: "weightedAngle", label: "tension: weighted angle" },
   { key: "cornerPoint", label: "tension: inner corner point" },

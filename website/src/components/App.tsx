@@ -147,7 +147,7 @@ function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
 // hollow circles at the final radii (what the outline is actually wrapped
 // around), the centerline curve, and a marker at every outline contact point.
 function drawDebug(stroke: Stroke, options: InkOptions, t: number, key: string | number, layers: DebugLayers) {
-  const { curve, spline, outline, stages } = inkStages(stroke, options, t);
+  const { curve, outline, stages } = inkStages(stroke, options, t);
   return (
     <g key={key}>
       {layers.circles && stages.simplified.map((p, j) => (
@@ -155,7 +155,6 @@ function drawDebug(stroke: Stroke, options: InkOptions, t: number, key: string |
           stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.5" vector-effect="non-scaling-stroke" />
       ))}
       {layers.centerline && <path d={curve} stroke="#3b82f6" stroke-width="1" fill="none" vector-effect="non-scaling-stroke" />}
-      {layers.splineCurve && <path d={spline} stroke="#06b6d4" stroke-width="1" fill="none" vector-effect="non-scaling-stroke" />}
       {DEBUG_STAGES.map(({ key: k, color, dot }) => layers[k] && (
         <g key={k}>
           {stages[k].map((p, j) => (

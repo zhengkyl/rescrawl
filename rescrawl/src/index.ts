@@ -12,7 +12,6 @@ export type {
   Point3,
   Point4,
   RenderOptions,
-  Sample,
   StrokeRender,
   StrokeStages,
 } from "./types";
