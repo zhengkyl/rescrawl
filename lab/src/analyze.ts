@@ -1,4 +1,5 @@
 import { clamp11, dist, wrapPi } from "rescrawl/math";
+import type { TensionOptions } from "rescrawl/outline";
 import type { Contact, Point4 } from "rescrawl/types";
 
 // --- what the panel reads ---
@@ -37,7 +38,10 @@ export type Joint = {
   branch: "sweep" | "fold" | "flat";
 };
 
-export type Kind = "primary" | "arc" | "off-disc";
+// `joint` is a tension-mode contact: the one contact a node gets per side,
+// at the mean of its two candidate angles (possibly pushed off the disc to the
+// inner corner point).
+export type Kind = "primary" | "joint" | "arc" | "off-disc";
 
 export type ContactInfo = {
   owner: number; // index of the disc it is closest to lying ON
@@ -109,32 +113,67 @@ export function joints(pts: Point4[], segs: Seg[]): Joint[] {
   return out;
 }
 
-// Which disc is this contact on, and where? Read entirely off the output.
-function classify(c: Contact, pts: Point4[], segs: Seg[]): ContactInfo {
+// The tension-mode contact angle at interior point `i` on one side: the mean
+// of the two candidates, plain or leaning on the shorter segment. Mirrors
+// `toOutlineTension`.
+export function midAt(segs: Seg[], n: number, i: number, side: 1 | -1, weighted: boolean) {
+  const [behind, ahead] = anglesAt(segs, n, i, side);
+  const sum = segs[i - 1].d + segs[i].d;
+  const w = weighted && sum > 0 ? segs[i - 1].d / sum : 0.5;
+  return behind + wrapPi(ahead - behind) * w;
+}
+
+const sameAngle = (a: number, b: number) => Math.abs(wrapPi(a - b)) < 1e-7;
+
+// Which disc is this contact on, and where? Read entirely off the output,
+// except that `tension` says which mid-angle candidates count as a joint.
+function classify(c: Contact, pts: Point4[], segs: Seg[], tension: TensionOptions | null): ContactInfo {
+  const n = pts.length;
   let owner = 0;
   let radiusErr = Infinity;
-  for (let i = 0; i < pts.length; i++) {
+  for (let i = 0; i < n; i++) {
     const e = Math.abs(dist(c, pts[i]) - pts[i].r);
     if (e < radiusErr) {
       radiusErr = e;
       owner = i;
     }
   }
+  const onDisc = radiusErr <= 1e-6;
+
+  // An inner corner point sits off every disc, so "nearest radius" can pick
+  // the wrong owner for it. Prefer the interior disc whose mid angle it is on.
+  if (!onDisc && tension) {
+    for (let i = 1; i < n - 1 && !onDisc; i++) {
+      const a = Math.atan2(c.y - pts[i].y, c.x - pts[i].x);
+      for (const s of [1, -1] as const) {
+        if (sameAngle(a, midAt(segs, n, i, s, tension.weighted))) {
+          owner = i;
+          radiusErr = Math.abs(dist(c, pts[i]) - pts[i].r);
+        }
+      }
+    }
+  }
+
   const p = pts[owner];
   const angle = Math.atan2(c.y - p.y, c.x - p.x);
   const perpErr = c.tx * Math.cos(angle) + c.ty * Math.sin(angle);
 
   // A single disc has no segments, so every contact it emits is emitted
   // directly rather than by `pushSweep`.
-  let kind: Kind = radiusErr > 1e-6 ? "off-disc" : pts.length === 1 ? "primary" : "arc";
+  let kind: Kind = !onDisc ? "off-disc" : n === 1 ? "primary" : "arc";
   let side: 0 | 1 | -1 = 0;
-  if (kind === "arc") {
+  if (n > 1) {
     for (const s of [1, -1] as const) {
-      for (const cand of anglesAt(segs, pts.length, owner, s)) {
-        if (Math.abs(wrapPi(angle - cand)) < 1e-7) {
-          kind = "primary";
-          side = s;
+      if (onDisc)
+        for (const cand of anglesAt(segs, n, owner, s)) {
+          if (sameAngle(angle, cand)) {
+            kind = "primary";
+            side = s;
+          }
         }
+      if (tension && owner > 0 && owner < n - 1 && sameAngle(angle, midAt(segs, n, owner, s, tension.weighted))) {
+        kind = "joint";
+        side = s;
       }
     }
   }
@@ -180,9 +219,9 @@ const shoelace = (cs: Contact[]) => {
   return s / 2;
 };
 
-export function analyze(pts: Point4[], cs: Contact[]): Analysis {
+export function analyze(pts: Point4[], cs: Contact[], tension: TensionOptions | null = null): Analysis {
   const segs = segments(pts);
-  const info = cs.map((c) => classify(c, pts, segs));
+  const info = cs.map((c) => classify(c, pts, segs, tension));
   for (let i = 0; i < cs.length; i++)
     info[i].dupPrev = cs.length > 1 && dist(cs[i], cs[(i + cs.length - 1) % cs.length]) < 1e-9;
   return {

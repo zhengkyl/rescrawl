@@ -37,6 +37,42 @@
 
 				<section>
 					<div class="row">
+						<span class="lbl">outline</span>
+						<select id="mode">
+							<option value="tangents">tangents — toOutline</option>
+							<option value="tension">tension — toOutlineTension</option>
+						</select>
+					</div>
+					<div id="tensionKnobs" hidden>
+						<div class="row">
+							<span class="lbl" title="turn at which the magnitude is halfway from the chord rule to the corner rule">corner</span>
+							<input data-tension="cornerAngle" type="range" min="0" max="180" step="1" />
+							<span class="num" data-for="cornerAngle"></span>
+						</div>
+						<div class="row">
+							<span class="lbl" title="corner magnitude = scale · r · |turn|; ~1.4 fits a round pen corner">scale</span>
+							<input data-tension="cornerScale" type="range" min="0" max="3" step="0.05" />
+							<span class="num" data-for="cornerScale"></span>
+						</div>
+						<div class="row">
+							<span class="lbl" title="beyond this turn, fall back to the sweep / fold construction">max turn</span>
+							<input data-tension="maxTurn" type="range" min="0" max="180" step="1" />
+							<span class="num" data-for="maxTurn"></span>
+						</div>
+						<div class="toggles">
+							<label><input type="checkbox" data-tension="weighted" /> weighted angle</label>
+							<label><input type="checkbox" data-tension="cornerPoint" /> inner corner point</label>
+						</div>
+						<p class="hint">
+							one contact per node per side. <b>corner</b> is where the blend from the chord
+							rule to the corner rule is halfway; 0° is all corner rule, 180° all chord rule.
+							<b>max turn</b> at 180° never falls back.
+						</p>
+					</div>
+				</section>
+
+				<section>
+					<div class="row">
 						<span class="lbl">step</span>
 						<input id="step" type="range" min="0" max="1" value="1" step="1" />
 						<span id="stepNum" class="num">all</span>

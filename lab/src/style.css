@@ -102,6 +102,18 @@ input[type="number"] {
   border-radius: 3px;
   padding: 1px 4px;
 }
+select {
+  font: inherit;
+  flex: 1;
+  background: #10151c;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.lbl {
+  width: 56px;
+}
 input[type="range"] {
   flex: 1;
   accent-color: var(--accent);
@@ -231,7 +243,8 @@ td.bad,
 .br-flat {
   color: var(--dim);
 }
-.primary {
+.primary,
+.joint {
   color: var(--accent);
 }
 .arc {
@@ -316,6 +329,12 @@ td.bad,
 .dir {
   stroke: var(--accent);
   stroke-width: 1;
+}
+.handle {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+  opacity: 0.6;
 }
 .contact {
   stroke: #0e1116;

@@ -1,3 +1,4 @@
+import { TENSION_DEFAULTS, type TensionOptions } from "rescrawl/outline";
 import type { Point4 } from "rescrawl/types";
 
 export type Show = {
@@ -17,8 +18,12 @@ export type Show = {
 
 export type Hover = { kind: "contact" | "point"; i: number } | null;
 
+export type Mode = "tangents" | "tension";
+
 export type State = {
   pts: Point4[];
+  mode: Mode; // which outline function draws the shape
+  tension: TensionOptions;
   view: { cx: number; cy: number; scale: number }; // scale = px per world unit
   step: number; // -1 = whole loop
   sel: number | null;
@@ -56,6 +61,8 @@ export function preset(n: number): Point4[] {
 export function initial(): State {
   return {
     pts: preset(3),
+    mode: "tangents",
+    tension: { ...TENSION_DEFAULTS },
     view: { cx: 220, cy: 150, scale: 2 },
     step: -1,
     sel: null,
@@ -69,9 +76,9 @@ const KEY = "outline-lab";
 // Persisted so a hot reload -- the point of this app -- does not throw away the
 // case you were looking at.
 export function save(s: State) {
-  const { pts, view, step, sel, show } = s;
+  const { pts, mode, tension, view, step, sel, show } = s;
   try {
-    localStorage.setItem(KEY, JSON.stringify({ pts, view, step, sel, show }));
+    localStorage.setItem(KEY, JSON.stringify({ pts, mode, tension, view, step, sel, show }));
   } catch {}
 }
 
@@ -86,6 +93,8 @@ export function load(): State {
     if (typeof j?.step === "number") base.step = j.step;
     if (typeof j?.sel === "number") base.sel = j.sel;
     if (j?.show) base.show = { ...base.show, ...j.show };
+    if (j?.mode === "tangents" || j?.mode === "tension") base.mode = j.mode;
+    if (j?.tension) base.tension = { ...base.tension, ...j.tension };
   } catch {}
   return base;
 }

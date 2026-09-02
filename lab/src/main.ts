@@ -1,11 +1,11 @@
 import "./style.css";
-import { toOutline } from "rescrawl/outline";
+import { toOutline, toOutlineTension, type TensionOptions } from "rescrawl/outline";
 import { dropContained } from "rescrawl/simplify";
 import type { Contact, Point4 } from "rescrawl/types";
 import { analyze } from "./analyze";
 import { diagnostics, stepInfo } from "./panel";
 import { scene } from "./scene";
-import { load, preset, save, type Show, type State } from "./state";
+import { load, preset, save, type Mode, type Show, type State } from "./state";
 
 const $ = <T extends Element>(sel: string) => document.querySelector(sel) as T;
 
@@ -75,14 +75,14 @@ function render() {
   let cs: Contact[] = [];
   let err = "";
   try {
-    cs = toOutline(pts);
+    cs = state.mode === "tension" ? toOutlineTension(pts, state.tension) : toOutline(pts);
   } catch (e) {
     err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
   }
 
   if (err) {
     hud.className = "err";
-    hud.textContent = `toOutline threw — ${err}`;
+    hud.textContent = `${state.mode === "tension" ? "toOutlineTension" : "toOutline"} threw — ${err}`;
   } else {
     hud.className = "";
     hud.textContent =
@@ -91,7 +91,7 @@ function render() {
         : "";
   }
 
-  const an = analyze(pts, cs);
+  const an = analyze(pts, cs, state.mode === "tension" ? state.tension : null);
   svg.innerHTML = scene(state, pts, cs, an, 1 / scale);
   diag.innerHTML = diagnostics(state, pts, cs, an);
   diag.querySelectorAll<HTMLElement>(".crow").forEach((row) => {
@@ -270,6 +270,54 @@ document.querySelectorAll<HTMLInputElement>("[data-show]").forEach((box) => {
     render();
   });
 });
+
+// --- outline mode and its knobs ---
+//
+// Angles are edited in degrees and stored in radians. Each knob input names
+// its `TensionOptions` key in `data-tension`.
+
+const modeEl = $<HTMLSelectElement>("#mode");
+const knobs = $<HTMLElement>("#tensionKnobs");
+const DEG = Math.PI / 180;
+const ANGLE_KEYS = new Set<keyof TensionOptions>(["cornerAngle", "maxTurn"]);
+
+function syncKnobs() {
+  modeEl.value = state.mode;
+  knobs.hidden = state.mode !== "tension";
+  knobs.querySelectorAll<HTMLInputElement>("[data-tension]").forEach((inp) => {
+    const key = inp.dataset.tension as keyof TensionOptions;
+    const v = state.tension[key];
+    if (typeof v === "boolean") inp.checked = v;
+    else {
+      const shown = ANGLE_KEYS.has(key) ? v / DEG : v;
+      if (inp !== document.activeElement) inp.value = String(Math.round(shown * 100) / 100);
+      const label = knobs.querySelector<HTMLElement>(`[data-for="${key}"]`);
+      if (label) label.textContent = ANGLE_KEYS.has(key) ? `${Math.round(shown)}°` : shown.toFixed(2);
+    }
+  });
+}
+
+modeEl.addEventListener("change", () => {
+  state.mode = modeEl.value as Mode;
+  syncKnobs();
+  render();
+});
+
+knobs.addEventListener("input", (ev) => {
+  const inp = ev.target as HTMLInputElement;
+  const key = inp.dataset.tension as keyof TensionOptions | undefined;
+  if (!key) return;
+  if (typeof state.tension[key] === "boolean") (state.tension[key] as boolean) = inp.checked;
+  else {
+    const v = Number(inp.value);
+    if (!Number.isFinite(v)) return;
+    (state.tension[key] as number) = ANGLE_KEYS.has(key) ? v * DEG : v;
+  }
+  syncKnobs();
+  render();
+});
+
+syncKnobs();
 
 stepEl.addEventListener("input", () => {
   const v = Number(stepEl.value);

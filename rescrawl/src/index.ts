@@ -1,7 +1,8 @@
 // wide raw input -> narrow -> narrow -> narrow -> widen -> widen -> widen -> widen
 
 export { clamp11, dist, lerp, TAU, wrapPi } from "./math";
-export { outlineOf, renderStages, renderStroke, runPipeline } from "./pipeline";
+export { TENSION_DEFAULTS, toOutline, toOutlineTension, type TensionOptions } from "./outline";
+export { outlineOf, renderStages, renderStroke, runPipeline, tensionOf } from "./pipeline";
 export { toRadiiPointsFromRawSamples } from "./radius";
 export { COMPRESS_DEFAULTS, RENDER_DEFAULTS } from "./types";
 export type {

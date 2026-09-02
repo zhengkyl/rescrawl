@@ -23,12 +23,12 @@ export function diagnostics(state: State, pts: Point4[], cs: Contact[], an: Anal
   if (perp > 1e-9)
     warn.push(`tangent is not perpendicular to the radius (max ${perp.toExponential(1)}).`);
 
-  const prim = an.info.filter((i) => i.kind === "primary").length;
+  const prim = an.info.filter((i) => i.kind === "primary" || i.kind === "joint").length;
 
   const summary = `
     <table class="kv">
       <tr><td>points</td><td>${pts.length}</td></tr>
-      <tr><td>contacts</td><td>${cs.length} <span class="dim">(${prim} primary, ${cs.length - prim} arc)</span></td></tr>
+      <tr><td>contacts</td><td>${cs.length} <span class="dim">(${prim} ${state.mode === "tension" ? "joint" : "primary"}, ${cs.length - prim} arc)</span></td></tr>
       <tr><td>self-crossings</td><td class="${an.crossings.length ? "br-fold" : "dim"}">${an.crossings.length}<span class="dim">${an.crossings.length ? " — folds" : ""}</span></td></tr>
       <tr><td>signed area</td><td>${num(an.area, 1)} <span class="dim">${an.area < 0 ? "cw" : "ccw"}</span></td></tr>
       <tr><td>path (1 digit)</td><td>${outlinePath(cs, 1).length} chars</td></tr>
@@ -73,7 +73,7 @@ export function diagnostics(state: State, pts: Point4[], cs: Contact[], an: Anal
       return `<tr class="crow${hov ? " hov" : ""}${cur ? " cur" : ""}${inf.dupPrev ? " bad" : ""}" data-c="${i}">
         <td>${i}</td><td>P${inf.owner}</td><td>${SIDE[inf.side]}</td>
         <td>${deg(inf.angle)}</td><td class="${inf.kind}">${inf.kind}</td>
-        <td>${num(c.x)}</td><td>${num(c.y)}</td></tr>`;
+        <td>${num(c.x)}</td><td>${num(c.y)}</td><td class="dim">${c.m === undefined ? "chord" : num(c.m)}</td></tr>`;
     })
     .join("");
 
@@ -85,7 +85,7 @@ export function diagnostics(state: State, pts: Point4[], cs: Contact[], an: Anal
     ${joints}
     <h2>contacts <span class="dim">derived</span></h2>
     <div class="scroll"><table class="tbl">
-      <tr><th>#</th><th>on</th><th>side</th><th>angle</th><th>kind</th><th>x</th><th>y</th></tr>
+      <tr><th>#</th><th>on</th><th>side</th><th>angle</th><th>kind</th><th>x</th><th>y</th><th>m</th></tr>
       ${rows}
     </table></div>`;
 }
@@ -103,6 +103,8 @@ export function stepInfo(state: State, cs: Contact[], an: Analysis): string {
       ? `arc step around P${inf.owner}`
       : same
         ? `second contact on P${inf.owner} — the other side of the joint`
+        : inf.kind === "joint"
+        ? `joint on P${inf.owner}${cs[i].m === undefined ? "" : ` — m ${num(cs[i].m!)}`}`
         : `contact on P${inf.owner}`;
   return `<b>#${i}</b> ${what} at ${deg(inf.angle)}`;
 }

@@ -1,5 +1,5 @@
 import { toRadiiPointsFromRawSamples } from "./radius";
-import { offsetOutline, toOutline } from "./outline";
+import { offsetOutline, toOutline, toOutlineTension, type TensionOptions } from "./outline";
 import { dropContained, simplify } from "./simplify";
 import { smoothPositions } from "./smooth";
 import { sampleSpline } from "./spline";
@@ -35,11 +35,24 @@ export function runPipeline(points: Point3[], o: Required<RenderOptions>): Strok
   return { raw: points, snapped, radius, smoothed, distinct, simplified, spline };
 }
 
-// Same envelope either way — `splineOutline` only picks which centerline it is
-// evaluated along.
+const DEG = Math.PI / 180;
+
+export function tensionOf(o: Required<RenderOptions>): TensionOptions {
+  return {
+    cornerAngle: o.cornerAngle * DEG,
+    cornerScale: o.cornerScale,
+    maxTurn: o.maxTurn * DEG,
+    weighted: o.weightedAngle,
+    cornerPoint: o.cornerPoint,
+  };
+}
+
+// `splineOutline` picks which centerline the outline is evaluated along;
+// `tensionOutline` picks which construction wraps the points.
 export function outlineOf(stages: StrokeStages, o: Required<RenderOptions>): Contact[] {
-  return o.splineOutline && stages.spline.length
-    ? offsetOutline(stages.spline)
+  if (o.splineOutline && stages.spline.length) return offsetOutline(stages.spline);
+  return o.tensionOutline
+    ? toOutlineTension(stages.simplified, tensionOf(o))
     : toOutline(stages.simplified);
 }
 

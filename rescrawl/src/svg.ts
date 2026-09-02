@@ -130,13 +130,20 @@ export function centerlinePath(pts: Point2[], digits = DEFAULT_DIGITS): string {
   return pen.toString();
 }
 
-// One cubic per pair. Hermite tangents are the stored unit tangents scaled by
-// the chord times `sec²(turn/4)` — the factor that makes a cubic reproduce a
-// circular arc of that turn. It is 1 when the tangents are parallel, so a
-// straight run emits its chord exactly, and 1.172 across a quarter turn.
-//
-// Bezier control points sit at a third of the Hermite tangent, so the scale is
-// folded into `k` once and used on both ends.
+// The chord rule: the full Hermite tangent length for a cubic between two
+// contacts is the chord times `sec²(turn/4)` — the factor that makes a cubic
+// reproduce a circular arc of that turn. It is 1 when the tangents are
+// parallel, so a straight run emits its chord exactly, and 1.172 across a
+// quarter turn.
+export function hermiteMag(a: Contact, b: Contact): number {
+  // cos(turn/2) by half angle, so sec²(turn/4) needs no trig of its own.
+  const half = Math.sqrt((1 + clamp11(a.tx * b.tx + a.ty * b.ty)) / 2);
+  return (dist(a, b) * 2) / (1 + half);
+}
+
+// One cubic per pair. Each end's Hermite tangent is the stored unit tangent
+// scaled by the contact's own `m` if it has one, else by the chord rule.
+// Bezier control points sit at a third of the Hermite tangent.
 export function outlinePath(cs: Contact[], digits = DEFAULT_DIGITS): string {
   const n = cs.length;
   if (n < 2) return "";
@@ -145,10 +152,10 @@ export function outlinePath(cs: Contact[], digits = DEFAULT_DIGITS): string {
   for (let i = 0; i < n; i++) {
     const a = cs[i],
       b = cs[(i + 1) % n];
-    // cos(turn/2) by half angle, so sec²(turn/4) needs no trig of its own.
-    const half = Math.sqrt((1 + clamp11(a.tx * b.tx + a.ty * b.ty)) / 2);
-    const k = (dist(a, b) * 2) / (3 * (1 + half));
-    pen.curveTo(a.x + a.tx * k, a.y + a.ty * k, b.x - b.tx * k, b.y - b.ty * k, b.x, b.y);
+    const m = hermiteMag(a, b);
+    const ka = (a.m ?? m) / 3;
+    const kb = (b.m ?? m) / 3;
+    pen.curveTo(a.x + a.tx * ka, a.y + a.ty * ka, b.x - b.tx * kb, b.y - b.ty * kb, b.x, b.y);
   }
   pen.close();
   return pen.toString();

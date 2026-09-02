@@ -292,12 +292,21 @@ export const INK_CONTROLS: InkControl[] = [
   // so the debug layers have something to draw; `splineOutline` below is what
   // decides whether the ink uses it.
   { key: "splineTol", label: "spline tol (px)", min: 0.01, max: 2, step: 0.01 },
+  // Tension outline only (see `toOutlineTension`). `cornerAngle` is where the
+  // contact magnitude is halfway from the chord rule to the corner rule;
+  // `maxTurn` is where it gives up and falls back to the tangent construction.
+  { key: "cornerAngle", label: "corner angle (deg)", min: 0, max: 180, step: 1 },
+  { key: "cornerScale", label: "corner scale (xr)", min: 0, max: 3, step: 0.05 },
+  { key: "maxTurn", label: "max turn (deg)", min: 0, max: 180, step: 1 },
 ];
 
 // Ink options that are on/off rather than a range.
 export type InkToggle = { key: BooleanKeys<InkOptions>; label: string };
 export const INK_TOGGLES: InkToggle[] = [
   { key: "splineOutline", label: "outline from spline" },
+  { key: "tensionOutline", label: "tension outline" },
+  { key: "weightedAngle", label: "tension: weighted angle" },
+  { key: "cornerPoint", label: "tension: inner corner point" },
 ];
 
 export function getDefaultStrategies(): StrategiesState {

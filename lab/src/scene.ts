@@ -1,4 +1,4 @@
-import { outlinePath } from "rescrawl/svg";
+import { hermiteMag, outlinePath } from "rescrawl/svg";
 import type { Contact, Point4 } from "rescrawl/types";
 import type { Analysis } from "./analyze";
 import type { Hover, State } from "./state";
@@ -77,12 +77,19 @@ export function scene(state: State, pts: Point4[], cs: Contact[], an: Analysis, 
       );
     });
 
-  // --- stored unit tangents ---
+  // --- stored unit tangents, and the control handles `outlinePath` derives ---
   if (s.tangentDirs)
-    cs.slice(0, step).forEach((c) => {
+    cs.slice(0, step).forEach((c, i) => {
       const L = 14 * k;
       out.push(
         `<line class="dir" x1="${f(c.x)}" y1="${f(c.y)}" x2="${f(c.x + c.tx * L)}" y2="${f(c.y + c.ty * L)}" marker-end="url(#arw)" vector-effect="non-scaling-stroke"/>`,
+      );
+      const prev = cs[(i + n - 1) % n];
+      const next = cs[(i + 1) % n];
+      const ka = (c.m ?? hermiteMag(prev, c)) / 3;
+      const kb = (c.m ?? hermiteMag(c, next)) / 3;
+      out.push(
+        `<line class="handle" x1="${f(c.x - c.tx * ka)}" y1="${f(c.y - c.ty * ka)}" x2="${f(c.x + c.tx * kb)}" y2="${f(c.y + c.ty * kb)}" vector-effect="non-scaling-stroke"/>`,
       );
     });
 
@@ -92,12 +99,13 @@ export function scene(state: State, pts: Point4[], cs: Contact[], an: Analysis, 
       const inf = an.info[i];
       const isHover = state.hover?.kind === "contact" && state.hover.i === i;
       const isCur = partial && i === step - 1;
-      const r = (isCur ? 6 : isHover ? 5.5 : inf.kind === "primary" ? 4 : 2.6) * k;
+      const big = inf.kind === "primary" || inf.kind === "joint";
+      const r = (isCur ? 6 : isHover ? 5.5 : big ? 4 : 2.6) * k;
       const cls = `contact ${inf.kind}${isCur ? " cur" : ""}${isHover ? " hov" : ""}${inf.dupPrev ? " dup" : ""}`;
       out.push(
         `<circle class="${cls}" data-c="${i}" cx="${f(c.x)}" cy="${f(c.y)}" r="${f(r)}" fill="${hue(n < 2 ? 0 : i / (n - 1))}" vector-effect="non-scaling-stroke"/>`,
       );
-      if (s.labels && (inf.kind === "primary" || isCur || isHover))
+      if (s.labels && (big || isCur || isHover))
         out.push(
           `<text class="clabel" x="${f(c.x + 8 * k)}" y="${f(c.y - 6 * k)}" font-size="${f(11 * k)}">${i}</text>`,
         );
