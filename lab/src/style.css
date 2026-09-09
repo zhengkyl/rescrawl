@@ -114,6 +114,16 @@ select {
 .lbl {
   width: 56px;
 }
+.knobs .lbl {
+  width: 92px;
+}
+.knob-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  margin-bottom: 5px;
+}
 input[type="range"] {
   flex: 1;
   accent-color: var(--accent);
@@ -247,7 +257,8 @@ td.bad,
 .joint {
   color: var(--accent);
 }
-.arc {
+.arc,
+.sample {
   color: var(--dim);
 }
 .crow {
@@ -306,6 +317,26 @@ td.bad,
 }
 .disc.sel {
   stroke: #58708f;
+}
+.disc.dropped {
+  stroke-dasharray: 1 4;
+  opacity: 0.5;
+}
+.pt.dropped,
+.plabel.dropped {
+  opacity: 0.4;
+}
+.ntan {
+  stroke: #c084fc;
+  stroke-width: 1.25;
+}
+.ntan.in {
+  stroke-dasharray: 3 2;
+}
+.corner {
+  fill: none;
+  stroke: #fbbf24;
+  stroke-width: 1.25;
 }
 .tangent {
   stroke: #4b5c73;

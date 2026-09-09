@@ -1,10 +1,10 @@
-import { createContext } from 'preact';
-import type { Dispatch, StateUpdater } from 'preact/hooks';
-import { useContext } from 'preact/hooks';
-import type { DebugLayers, InkOptions, StrategiesState } from './curves';
-import type { useCanvasView } from './hooks/useCanvasView';
-import type { Playhead } from './hooks/usePlayhead';
-import type { Config } from './utils';
+import { createContext } from "preact";
+import type { Dispatch, StateUpdater } from "preact/hooks";
+import { useContext } from "preact/hooks";
+import type { DebugLayers, InkOptions, StrategiesState } from "./curves";
+import type { useCanvasView } from "./hooks/useCanvasView";
+import type { Playhead } from "./hooks/usePlayhead";
+import type { Config } from "./utils";
 
 // Per-workspace UI state, so the drawing surface (App) and the surrounding
 // chrome (Workspace) can each pull exactly what they need instead of threading

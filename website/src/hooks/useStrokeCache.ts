@@ -1,6 +1,6 @@
-import { useRef } from 'preact/hooks';
-import type { RenderedLine } from '../curves';
-import type { Stroke } from '../utils';
+import { useRef } from "preact/hooks";
+import type { RenderedLine } from "../curves";
+import type { Stroke } from "../utils";
 
 // Per-stroke cache of fully-drawn geometry. A committed stroke's geometry is
 // fixed until the stroke is edited (which produces a new array — the store reuses
@@ -24,14 +24,22 @@ export function useStrokeCache(rev: unknown) {
 
   // Stable across renders (it reads live state through refs) so it can sit in a
   // memo's deps without busting it every frame.
-  const apiRef = useRef<{ get: (s: Stroke, variant: string, compute: () => RenderedLine) => RenderedLine } | null>(null);
+  const apiRef = useRef<{
+    get: (s: Stroke, variant: string, compute: () => RenderedLine) => RenderedLine;
+  } | null>(null);
   if (!apiRef.current) {
     apiRef.current = {
       get(stroke, variant, compute) {
         let byVariant = cacheRef.current.get(stroke);
-        if (!byVariant) { byVariant = new Map(); cacheRef.current.set(stroke, byVariant); }
+        if (!byVariant) {
+          byVariant = new Map();
+          cacheRef.current.set(stroke, byVariant);
+        }
         let line = byVariant.get(variant);
-        if (line === undefined) { line = compute(); byVariant.set(variant, line); }
+        if (line === undefined) {
+          line = compute();
+          byVariant.set(variant, line);
+        }
         return line;
       },
     };

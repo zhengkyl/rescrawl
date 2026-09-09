@@ -5,9 +5,7 @@ import { useContext, useMemo } from "preact/hooks";
 import type { Stroke } from "./utils";
 import { LIVE_TIMEOUT, strokeEnd, strokeStart } from "./utils";
 
-type Op =
-  | { type: "append"; stroke: Stroke }
-  | { type: "replace"; prev: Stroke[]; next: Stroke[] };
+type Op = { type: "append"; stroke: Stroke } | { type: "replace"; prev: Stroke[]; next: Stroke[] };
 
 type Entry = { op: Op; prevFocus: number; nextFocus: number };
 

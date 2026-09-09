@@ -1,5 +1,5 @@
-import { useApp } from '../context';
-import { MAX_ZOOM, MIN_ZOOM } from '../hooks/useCanvasView';
+import { useApp } from "../context";
+import { MAX_ZOOM, MIN_ZOOM } from "../hooks/useCanvasView";
 
 export function ZoomControl() {
   const { view } = useApp();

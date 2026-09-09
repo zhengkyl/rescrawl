@@ -1,27 +1,6 @@
 import { lerp } from "./math";
 import type { Point4 } from "./types";
 
-// --- stage 3 of 4: drop points that do not change the shape ---
-//
-// Two passes, both about circles rather than about the curve:
-//
-//   dropContained  a circle entirely inside a neighbour contributes no ink at
-//                  all, AND has no tangent line to it -- so it breaks the
-//                  outline math downstream. Always runs.
-//   simplify       a circle already covered by the tube between two others is
-//                  redundant to within `tol`. This is the smoothness knob.
-//
-// Not to be confused with stage 0 (`compress.ts`), which also drops points but
-// answers a different question: stage 0 decides what the FILE holds, in px of
-// path deviation, and runs before any of this. Here the tolerance is a fraction
-// of the local radius, because what is being tested is whether a circle adds
-// ink -- a point that matters on a hairline is noise on a broad stroke.
-
-// Longest run of points `simplify` will drop between two kept ones. Re-testing
-// the pending run on every step is O(run^2) per run, so an unbroken straight
-// stroke would go quadratic; a cap keeps it linear. Loose enough that it only
-// binds on very smooth runs -- at 64 a 2000-point arc still collapses to ~32
-// points with under 0.1px of error.
 const MAX_RUN = 64;
 
 function covered(a: Point4, b: Point4, p: Point4, tol: number): boolean {
@@ -54,34 +33,21 @@ function covered(a: Point4, b: Point4, p: Point4, tol: number): boolean {
   return gap > 0 && dist2 <= gap * gap;
 }
 
-// Reumann-Witkam with a variable-radius tube.
-//
-// A point is dropped when its circle is already covered by the tube spanning
-// the anchor and the chord end. Since that tube is convex and contains all
-// three circles, it also contains hull(anchor, dropped) and hull(dropped, end)
-// -- so dropping a point can only *add* a sliver of ink on the outside of a
-// bend, never erode the shape. That one-sided error is the reason to test
-// coverage rather than a chord distance: `decimate`'s eps can pull the outline
-// inward, this cannot.
-//
-// At tol = 0 the test is lossless and therefore drops almost nothing: a
-// constant-width stroke has gap = r - r = 0, so only exactly-collinear points
-// go. tol is what makes it do work, and doubles as the smoothness knob.
-//
-// Sleeve-fitting: every point dropped since the anchor is re-tested against the
-// lengthened chord, not just the most recent one. Testing only the newest point
-// is O(n) but lets error accumulate without bound around a steady curve, since
-// a point cleared against a short chord is never rechecked against the long one.
-export function simplify(points: Point4[], tol: number): Point4[] {
+export function simplify(points: Point4[], tol: number, maxMs = Infinity, live = 0): Point4[] {
   const n = points.length;
   if (n <= 2) return points;
+
+  // The simplified part is points[0 .. cut - 1]; points[cut - 1] is the last
+  // committed node and everything from it on is passed through as sampled.
+  const cut = n - Math.max(0, Math.floor(live));
+  if (cut < 2) return points;
 
   const out = [points[0]];
   let a = 0; // anchor: index of the last kept point
   let i = 1; // furthest chord end that still covers everything behind it
-  while (i < n - 1) {
+  while (i < cut - 1) {
     // Would extending the chord to i + 1 still cover points (a, i]?
-    let fits = i - a <= MAX_RUN;
+    let fits = i - a <= MAX_RUN && points[i + 1].t - points[a].t <= maxMs;
     for (let j = a + 1; fits && j <= i; j++) {
       fits = covered(points[a], points[i + 1], points[j], tol);
     }
@@ -93,7 +59,7 @@ export function simplify(points: Point4[], tol: number): Point4[] {
     a = i;
     i = a + 1;
   }
-  out.push(points[n - 1]);
+  for (let j = cut - 1; j < n; j++) out.push(points[j]);
   return out;
 }
 

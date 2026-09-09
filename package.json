@@ -1,12 +1,13 @@
 {
-	"name": "rescrawl-monorepo",
-	"private": true,
-	"packageManager": "pnpm@10.28.0",
-	"scripts": {
-		"dev": "pnpm --filter website dev",
-		"lab": "pnpm --filter lab dev"
-	},
-	"devDependencies": {
-		"oxfmt": "^0.62.0"
-	}
+  "name": "rescrawl-monorepo",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --filter website dev",
+    "lab": "pnpm --filter lab dev",
+    "fmt": "oxfmt"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.62.0"
+  },
+  "packageManager": "pnpm@10.28.0"
 }

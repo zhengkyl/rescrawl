@@ -1,11 +1,12 @@
 import "./style.css";
-import { toOutline, toOutlineTension, type TensionOptions } from "rescrawl/outline";
+import { ENGINES } from "rescrawl/engine";
+import type { Shape } from "rescrawl/engine";
 import { dropContained } from "rescrawl/simplify";
-import type { Contact, Point4 } from "rescrawl/types";
+import type { OutlineEngine } from "rescrawl/types";
 import { analyze } from "./analyze";
 import { diagnostics, stepInfo } from "./panel";
 import { scene } from "./scene";
-import { load, preset, save, type Mode, type Show, type State } from "./state";
+import { load, preset, save, type Show, type State } from "./state";
 
 const $ = <T extends Element>(sel: string) => document.querySelector(sel) as T;
 
@@ -19,7 +20,7 @@ const pointRows = $<HTMLElement>("#pointRows");
 
 const state: State = load();
 
-const MAX_PTS = 8;
+const MAX_PTS = 12;
 
 // --- geometry of the view -------------------------------------------------
 
@@ -71,29 +72,32 @@ function render() {
   svg.setAttribute("viewBox", `${cx - w / 2} ${cy - h / 2} ${w} ${h}`);
 
   const pts = state.show.drop ? dropContained(state.pts) : state.pts;
+  const engine = ENGINES[state.opts.engine];
 
-  let cs: Contact[] = [];
+  let shape: Shape = { nodes: [], outline: [], spine: "" };
   let err = "";
   try {
-    cs = state.mode === "tension" ? toOutlineTension(pts, state.tension) : toOutline(pts);
+    shape = engine(pts, state.opts);
   } catch (e) {
     err = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
   }
+  const { nodes, outline: cs, spine } = shape;
 
+  const an = analyze(pts, nodes, cs, state.opts);
   if (err) {
     hud.className = "err";
-    hud.textContent = `${state.mode === "tension" ? "toOutlineTension" : "toOutline"} threw — ${err}`;
+    hud.textContent = `${state.opts.engine} engine threw — ${err}`;
   } else {
     hud.className = "";
-    hud.textContent =
-      state.show.drop && pts.length < state.pts.length
-        ? `dropContained removed ${state.pts.length - pts.length} point(s)`
-        : "";
+    const notes: string[] = [];
+    if (state.show.drop && pts.length < state.pts.length)
+      notes.push(`dropContained removed ${state.pts.length - pts.length} point(s)`);
+    if (an.dropped.length) notes.push(`${state.opts.engine} dropped P${an.dropped.join(", P")}`);
+    hud.textContent = notes.join(" · ");
   }
 
-  const an = analyze(pts, cs, state.mode === "tension" ? state.tension : null);
-  svg.innerHTML = scene(state, pts, cs, an, 1 / scale);
-  diag.innerHTML = diagnostics(state, pts, cs, an);
+  svg.innerHTML = scene(state, pts, nodes, cs, an, 1 / scale, spine);
+  diag.innerHTML = diagnostics(state, pts, nodes, cs, an);
   diag.querySelectorAll<HTMLElement>(".crow").forEach((row) => {
     const i = Number(row.dataset.c);
     row.onpointerenter = () => setHover({ kind: "contact", i });
@@ -252,7 +256,7 @@ window.addEventListener("keydown", (ev: KeyboardEvent) => {
 
 document.querySelectorAll<HTMLButtonElement>("[data-preset]").forEach((b) =>
   b.addEventListener("click", () => {
-    state.pts = preset(Number(b.dataset.preset));
+    state.pts = preset(b.dataset.preset!);
     state.sel = null;
     state.step = -1;
     render();
@@ -271,47 +275,56 @@ document.querySelectorAll<HTMLInputElement>("[data-show]").forEach((box) => {
   });
 });
 
-// --- outline mode and its knobs ---
+// --- engine and its knobs ---
 //
-// Angles are edited in degrees and stored in radians. Each knob input names
-// its `TensionOptions` key in `data-tension`.
+// Every knob row lives in index.html, inside the `.knobs` block of the engine
+// that reads it, and names its `RenderOptions` key in `data-knob`. So this
+// only has to show the right block and copy values in and out. Range inputs
+// carry a number, checkboxes a boolean; the one cast below is the whole
+// bridge between DOM strings and the typed options.
 
-const modeEl = $<HTMLSelectElement>("#mode");
-const knobs = $<HTMLElement>("#tensionKnobs");
-const DEG = Math.PI / 180;
-const ANGLE_KEYS = new Set<keyof TensionOptions>(["cornerAngle", "maxTurn"]);
+const engineEl = $<HTMLSelectElement>("#engine");
+
+const readKnob = (key: string) => (state.opts as Record<string, unknown>)[key];
+const writeKnob = (key: string, v: number | boolean) => {
+  (state.opts as Record<string, unknown>)[key] = v;
+};
 
 function syncKnobs() {
-  modeEl.value = state.mode;
-  knobs.hidden = state.mode !== "tension";
-  knobs.querySelectorAll<HTMLInputElement>("[data-tension]").forEach((inp) => {
-    const key = inp.dataset.tension as keyof TensionOptions;
-    const v = state.tension[key];
-    if (typeof v === "boolean") inp.checked = v;
-    else {
-      const shown = ANGLE_KEYS.has(key) ? v / DEG : v;
-      if (inp !== document.activeElement) inp.value = String(Math.round(shown * 100) / 100);
-      const label = knobs.querySelector<HTMLElement>(`[data-for="${key}"]`);
-      if (label) label.textContent = ANGLE_KEYS.has(key) ? `${Math.round(shown)}°` : shown.toFixed(2);
+  engineEl.value = state.opts.engine;
+  document.querySelectorAll<HTMLElement>(".knobs").forEach((block) => {
+    block.hidden = block.dataset.engine !== state.opts.engine;
+  });
+  document.querySelectorAll<HTMLInputElement>("[data-knob]").forEach((inp) => {
+    const v = readKnob(inp.dataset.knob!);
+    if (inp.type === "checkbox") {
+      inp.checked = v === true;
+      return;
     }
+    // A slider mid-drag already shows the value; writing it back would fight
+    // the pointer. The readout beside it is updated either way.
+    if (inp !== document.activeElement) inp.value = String(v);
+    const num = inp.parentElement!.querySelector<HTMLElement>(`[data-for="${inp.dataset.knob}"]`);
+    if (num) num.textContent = String(Math.round(Number(v) * 100) / 100);
   });
 }
 
-modeEl.addEventListener("change", () => {
-  state.mode = modeEl.value as Mode;
+engineEl.addEventListener("change", () => {
+  state.opts.engine = engineEl.value as OutlineEngine;
+  state.step = -1;
   syncKnobs();
   render();
 });
 
-knobs.addEventListener("input", (ev) => {
+document.addEventListener("input", (ev) => {
   const inp = ev.target as HTMLInputElement;
-  const key = inp.dataset.tension as keyof TensionOptions | undefined;
+  const key = inp.dataset.knob;
   if (!key) return;
-  if (typeof state.tension[key] === "boolean") (state.tension[key] as boolean) = inp.checked;
+  if (inp.type === "checkbox") writeKnob(key, inp.checked);
   else {
     const v = Number(inp.value);
     if (!Number.isFinite(v)) return;
-    (state.tension[key] as number) = ANGLE_KEYS.has(key) ? v * DEG : v;
+    writeKnob(key, v);
   }
   syncKnobs();
   render();

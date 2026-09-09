@@ -1,21 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { useApp } from '../context';
-import { INK_COLOR, renderInk } from '../curves';
-import { useCanvasView } from '../hooks/useCanvasView';
-import { useStrokes } from '../strokeStore';
-import { countPoints, reframe, serialize, strokesBounds } from '../utils';
-import { drawLine } from './strokeRender';
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useApp } from "../context";
+import { INK_COLOR, renderInk } from "../curves";
+import { useCanvasView } from "../hooks/useCanvasView";
+import { useStrokes } from "../strokeStore";
+import { countPoints, reframe, serialize, strokesBounds } from "../utils";
+import { drawLine } from "./strokeRender";
 
 const DEFAULT_PADDING = 40;
 
-type Format = 'scrawl';
+type Format = "scrawl";
 const FORMATS: { id: Format; label: string; ext: string; mime: string; hint: string }[] = [
   {
-    id: 'scrawl',
-    label: '.scrawl',
-    ext: 'scrawl',
-    mime: 'text/plain',
-    hint: 'the points — re-importable, and exactly what the canvas renders',
+    id: "scrawl",
+    label: ".scrawl",
+    ext: "scrawl",
+    mime: "text/plain",
+    hint: "the points — re-importable, and exactly what the canvas renders",
   },
 ];
 
@@ -30,8 +30,8 @@ export function ExportDialog() {
   const store = useStrokes();
   const captured = store.strokes.value;
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const [format, setFormat] = useState<Format>('scrawl');
-  const [filename, setFilename] = useState('');
+  const [format, setFormat] = useState<Format>("scrawl");
+  const [filename, setFilename] = useState("");
   const [padding, setPadding] = useState(DEFAULT_PADDING);
   const [relative, setRelative] = useState(false);
 
@@ -54,7 +54,7 @@ export function ExportDialog() {
 
   function handleExport(name: string) {
     const blob = new Blob([text], { type: spec.mime });
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${name}.${spec.ext}`;
     a.click();
@@ -73,7 +73,7 @@ export function ExportDialog() {
 
   function handleSubmit(e: SubmitEvent) {
     e.preventDefault();
-    handleExport(filename.trim() || 'drawing');
+    handleExport(filename.trim() || "drawing");
   }
 
   return (
@@ -94,13 +94,31 @@ export function ExportDialog() {
                     y={bounds.minY - padding}
                     width={bounds.maxX - bounds.minX + 2 * padding}
                     height={bounds.maxY - bounds.minY + 2 * padding}
-                    fill="none" stroke="#4f8ef7" stroke-width="1.5" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"
+                    fill="none"
+                    stroke="#4f8ef7"
+                    stroke-width="1.5"
+                    stroke-dasharray="6 4"
+                    vector-effect="non-scaling-stroke"
                   />
                 )}
               </g>
             </svg>
-            <button type="button" class="preview-reset" title="Reset view" onClick={() => view.fitToView()}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <button
+              type="button"
+              class="preview-reset"
+              title="Reset view"
+              onClick={() => view.fitToView()}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <rect x="3" y="3" width="18" height="18" rx="2" />
                 <path d="M9 9h6v6H9z" />
               </svg>
@@ -115,7 +133,7 @@ export function ExportDialog() {
               <button
                 key={f.id}
                 type="button"
-                class={`format-btn${format === f.id ? ' on' : ''}`}
+                class={`format-btn${format === f.id ? " on" : ""}`}
                 onClick={() => setFormat(f.id)}
               >
                 {f.label}
@@ -149,20 +167,27 @@ export function ExportDialog() {
 
         <div class="dialog-field">
           <label>
-            <input type="checkbox" id="export-relative" checked={relative} onChange={(e) => setRelative((e.target as HTMLInputElement).checked)} />
-            {' '}All points relative (smaller; not re-importable)
+            <input
+              type="checkbox"
+              id="export-relative"
+              checked={relative}
+              onChange={(e) => setRelative((e.target as HTMLInputElement).checked)}
+            />{" "}
+            All points relative (smaller; not re-importable)
           </label>
         </div>
 
         <div class="dialog-field export-size">
-          <span>
-            {countPoints(stored).toLocaleString()} points
-          </span>
+          <span>{countPoints(stored).toLocaleString()} points</span>
           <span class="field-value">{formatBytes(fileSize)}</span>
         </div>
         <div class="dialog-actions">
-          <button type="button" id="export-cancel" onClick={onClose}>Cancel</button>
-          <button type="submit" id="export-confirm">Export</button>
+          <button type="button" id="export-cancel" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" id="export-confirm">
+            Export
+          </button>
         </div>
       </form>
     </dialog>

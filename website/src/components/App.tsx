@@ -1,14 +1,24 @@
-import type { ReadonlySignal, Signal } from '@preact/signals';
-import { computed, useSignal } from '@preact/signals';
-import { useEffect, useMemo, useRef } from 'preact/hooks';
-import { useApp } from '../context';
-import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from '../curves';
-import { DEBUG_STAGES, getActiveStrategies, hasRadiusLayer, INK_COLOR, inkStages, pickStagePoint, renderInk, STRATEGY_DEFS, strokeStages } from '../curves';
-import { useStrokeCache } from '../hooks/useStrokeCache';
-import { useStrokes } from '../strokeStore';
-import type { Stroke } from '../utils';
-import { activeStrokeAt, strokeEnd, withinStroke } from '../utils';
-import { drawLine } from './strokeRender';
+import type { ReadonlySignal, Signal } from "@preact/signals";
+import { computed, useSignal } from "@preact/signals";
+import { useEffect, useMemo, useRef } from "preact/hooks";
+import { useApp } from "../context";
+import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from "../curves";
+import {
+  DEBUG_STAGES,
+  getActiveStrategies,
+  hasRadiusLayer,
+  INK_COLOR,
+  inkStages,
+  pickStagePoint,
+  renderInk,
+  STRATEGY_DEFS,
+  strokeStages,
+} from "../curves";
+import { useStrokeCache } from "../hooks/useStrokeCache";
+import { useStrokes } from "../strokeStore";
+import type { Stroke } from "../utils";
+import { activeStrokeAt, strokeEnd, withinStroke } from "../utils";
+import { drawLine } from "./strokeRender";
 
 const INK_CHUNK = 128; // strokes per settled band
 const HOVER_PX = 14; // how close, in screen px, the cursor must come to read a radius
@@ -39,7 +49,13 @@ function sameStrokes(a: Stroke[], b: Stroke[]): boolean {
 // and sits out every other frame. The playhead is read with `peek` so it is
 // deliberately *not* a dependency: which strokes are settled can only change when
 // the count does, so the count is what decides a fresh read is needed.
-function InkBand({ strokes, settled, elapsed, inkOptions, cache }: Band & {
+function InkBand({
+  strokes,
+  settled,
+  elapsed,
+  inkOptions,
+  cache,
+}: Band & {
   elapsed: Signal<number>;
   inkOptions: InkOptions;
   cache: InkCache;
@@ -50,7 +66,11 @@ function InkBand({ strokes, settled, elapsed, inkOptions, cache }: Band & {
     <g>
       {strokes.map((s, j) =>
         strokeEnd(s) <= drawTime
-          ? drawLine(cache.get(s, '', () => renderInk(s, inkOptions, Infinity)), j, INK_COLOR)
+          ? drawLine(
+              cache.get(s, "", () => renderInk(s, inkOptions, Infinity)),
+              j,
+              INK_COLOR,
+            )
           : null,
       )}
     </g>
@@ -59,7 +79,11 @@ function InkBand({ strokes, settled, elapsed, inkOptions, cache }: Band & {
 
 // The 0–few strokes straddling the playhead — the only ink whose shape changes
 // per frame, so it reads the playhead directly and is what re-renders with it.
-function ActiveInk({ strokes, elapsed, inkOptions }: {
+function ActiveInk({
+  strokes,
+  elapsed,
+  inkOptions,
+}: {
   strokes: Stroke[];
   elapsed: Signal<number>;
   inkOptions: InkOptions;
@@ -69,7 +93,7 @@ function ActiveInk({ strokes, elapsed, inkOptions }: {
     <g>
       {strokes.map((s, i) =>
         withinStroke(s, drawTime)
-          ? drawLine(renderInk(s, inkOptions, drawTime), i, INK_COLOR)
+          ? drawLine(renderInk(s, inkOptions, drawTime, true), i, INK_COLOR)
           : null,
       )}
     </g>
@@ -79,7 +103,12 @@ function ActiveInk({ strokes, elapsed, inkOptions }: {
 // The stroke under the playhead — highlighted while idle so
 // it's clear which stroke the current time belongs to. Its own component so the
 // per-frame read stays out of <App>, and so it keeps painting over the overlays.
-function ActiveHighlight({ strokes, elapsed, isIdle, primary }: {
+function ActiveHighlight({
+  strokes,
+  elapsed,
+  isIdle,
+  primary,
+}: {
   strokes: Stroke[];
   elapsed: Signal<number>;
   isIdle: boolean;
@@ -88,7 +117,11 @@ function ActiveHighlight({ strokes, elapsed, isIdle, primary }: {
   const drawTime = elapsed.value;
   const active = !isIdle ? null : activeStrokeAt(strokes, drawTime);
   if (active === null || !strokes[active]) return null;
-  return <g>{drawLine(primary.def.render(strokes[active], primary.param, drawTime), 'active', '#4f8ef7')}</g>;
+  return (
+    <g>
+      {drawLine(primary.def.render(strokes[active], primary.param, drawTime), "active", "#4f8ef7")}
+    </g>
+  );
 }
 
 // The stage point under the cursor, plus where the cursor was (in viewport px,
@@ -112,10 +145,22 @@ function HoverRing({ hover }: { hover: Signal<HoverPick | null> }) {
   if (h === null) return null;
   return (
     <g>
-      <circle cx={h.x} cy={h.y} r={h.r} fill="none" stroke={h.color}
-        stroke-width="2.5" vector-effect="non-scaling-stroke" />
-      <path d={`M${h.x} ${h.y}h0`} stroke={h.color} stroke-width="5"
-        stroke-linecap="round" vector-effect="non-scaling-stroke" />
+      <circle
+        cx={h.x}
+        cy={h.y}
+        r={h.r}
+        fill="none"
+        stroke={h.color}
+        stroke-width="2.5"
+        vector-effect="non-scaling-stroke"
+      />
+      <path
+        d={`M${h.x} ${h.y}h0`}
+        stroke={h.color}
+        stroke-width="5"
+        stroke-linecap="round"
+        vector-effect="non-scaling-stroke"
+      />
     </g>
   );
 }
@@ -127,7 +172,12 @@ function HoverRing({ hover }: { hover: Signal<HoverPick | null> }) {
 function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
   const h = hover.value;
   if (h === null) return null;
-  const halo = { stroke: 'rgba(0,0,0,0.85)', 'stroke-width': 3, 'paint-order': 'stroke', 'stroke-linejoin': 'round' } as const;
+  const halo = {
+    stroke: "rgba(0,0,0,0.85)",
+    "stroke-width": 3,
+    "paint-order": "stroke",
+    "stroke-linejoin": "round",
+  } as const;
   // Sits above the cursor, except near the top edge, where there is no room.
   const below = h.sy < 34;
   return (
@@ -135,7 +185,9 @@ function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
       <text x="14" y={below ? 20 : -15} font-size="13" fill="#fff" {...halo}>
         {`r ${h.r.toFixed(2)} · dt ${h.dt.toFixed(1)}ms`}
       </text>
-      <text x="14" y={below ? 34 : -1} font-size="11" fill={h.color} {...halo}>{h.label}</text>
+      <text x="14" y={below ? 34 : -1} font-size="11" fill={h.color} {...halo}>
+        {h.label}
+      </text>
     </g>
   );
 }
@@ -146,24 +198,61 @@ function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
 // own radius — see DEBUG_STAGES for the order and colours. On top of those:
 // hollow circles at the final radii (what the outline is actually wrapped
 // around), the centerline curve, and a marker at every outline contact point.
-function drawDebug(stroke: Stroke, options: InkOptions, t: number, key: string | number, layers: DebugLayers) {
-  const { curve, outline, stages } = inkStages(stroke, options, t);
+function drawDebug(
+  stroke: Stroke,
+  options: InkOptions,
+  t: number,
+  live: boolean,
+  key: string | number,
+  layers: DebugLayers,
+) {
+  const { curve, outline, stages } = inkStages(stroke, options, t, live);
   return (
     <g key={key}>
-      {layers.circles && stages.simplified.map((p, j) => (
-        <circle key={`c${j}`} cx={p.x} cy={p.y} r={p.r} fill="none"
-          stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.5" vector-effect="non-scaling-stroke" />
-      ))}
-      {layers.centerline && <path d={curve} stroke="#3b82f6" stroke-width="1" fill="none" vector-effect="non-scaling-stroke" />}
-      {DEBUG_STAGES.map(({ key: k, color, dot }) => layers[k] && (
-        <g key={k}>
-          {stages[k].map((p, j) => (
-            <circle key={j} cx={p.x} cy={p.y} r={'r' in p ? p.r : dot} fill="none"
-              stroke={color} stroke-width="1" vector-effect="non-scaling-stroke" />
-          ))}
-        </g>
-      ))}
-      {layers.outline && outline.map((p, j) => <circle key={`o${j}`} cx={p.x} cy={p.y} r="1.2" fill="#ef4444" />)}
+      {layers.circles &&
+        stages.nodes.map((p, j) => (
+          <circle
+            key={`c${j}`}
+            cx={p.x}
+            cy={p.y}
+            r={p.r}
+            fill="none"
+            stroke="#3b82f6"
+            stroke-width="0.5"
+            stroke-opacity="0.5"
+            vector-effect="non-scaling-stroke"
+          />
+        ))}
+      {layers.centerline && (
+        <path
+          d={curve}
+          stroke="#3b82f6"
+          stroke-width="1"
+          fill="none"
+          vector-effect="non-scaling-stroke"
+        />
+      )}
+      {DEBUG_STAGES.map(
+        ({ key: k, color, dot }) =>
+          layers[k] && (
+            <g key={k}>
+              {stages[k].map((p, j) => (
+                <circle
+                  key={j}
+                  cx={p.x}
+                  cy={p.y}
+                  r={"r" in p ? p.r : dot}
+                  fill="none"
+                  stroke={color}
+                  stroke-width="1"
+                  vector-effect="non-scaling-stroke"
+                />
+              ))}
+            </g>
+          ),
+      )}
+      {layers.outline &&
+        outline.map((p, j) => <circle key={`o${j}`} cx={p.x} cy={p.y} r="1.2" fill="#ef4444" />)}
     </g>
   );
 }
@@ -173,8 +262,16 @@ function drawDebug(stroke: Stroke, options: InkOptions, t: number, key: string |
 // settled count) and an active layer (the 0–few strokes straddling the playhead,
 // rebuilt per frame). Strokes after the playhead are culled. Mirrors the ink
 // layer so an overlay doesn't reintroduce the per-frame "rebuild every stroke".
-function OverlayStrategy({ def, param, strokes, elapsed, inkOptions, debug, cache }: {
-  def: ActiveStrategy['def'];
+function OverlayStrategy({
+  def,
+  param,
+  strokes,
+  elapsed,
+  inkOptions,
+  debug,
+  cache,
+}: {
+  def: ActiveStrategy["def"];
   param: number;
   strokes: Stroke[];
   elapsed: Signal<number>;
@@ -183,7 +280,7 @@ function OverlayStrategy({ def, param, strokes, elapsed, inkOptions, debug, cach
   cache: ReturnType<typeof useStrokeCache>;
 }) {
   const drawTime = elapsed.value;
-  const isDebug = def.id === 'debug';
+  const isDebug = def.id === "debug";
   const settledCount = strokes.reduce((n, s) => n + (strokeEnd(s) <= drawTime ? 1 : 0), 0);
   const settled = useMemo(
     () => (
@@ -193,8 +290,12 @@ function OverlayStrategy({ def, param, strokes, elapsed, inkOptions, debug, cach
           // Debug geometry depends on ink options + layers (not cacheable); curve
           // strategies are independent of ink options, so they're cached.
           return isDebug
-            ? drawDebug(s, inkOptions, Infinity, i, debug)
-            : drawLine(cache.get(s, def.id, () => def.render(s, param, Infinity)), i, def.color);
+            ? drawDebug(s, inkOptions, Infinity, false, i, debug)
+            : drawLine(
+                cache.get(s, def.id, () => def.render(s, param, Infinity)),
+                i,
+                def.color,
+              );
         })}
       </g>
     ),
@@ -207,9 +308,9 @@ function OverlayStrategy({ def, param, strokes, elapsed, inkOptions, debug, cach
       <g>
         {strokes.map((s, i) =>
           withinStroke(s, drawTime)
-            ? (isDebug
-              ? drawDebug(s, inkOptions, drawTime, i, debug)
-              : drawLine(def.render(s, param, drawTime), i, def.color))
+            ? isDebug
+              ? drawDebug(s, inkOptions, drawTime, true, i, debug)
+              : drawLine(def.render(s, param, drawTime), i, def.color)
             : null,
         )}
       </g>
@@ -221,7 +322,12 @@ function OverlayStrategy({ def, param, strokes, elapsed, inkOptions, debug, cach
 // full (`Infinity`) since it exists only up to the live head. Rebuilt from
 // scratch on every frame the pen is down, so it owns that read and keeps <App>
 // (and with it the committed bands) out of the drawing loop.
-function LiveStroke({ points, inkOptions, strategies, debug }: {
+function LiveStroke({
+  points,
+  inkOptions,
+  strategies,
+  debug,
+}: {
   points: Signal<Stroke | null>;
   inkOptions: InkOptions;
   strategies: ActiveStrategy[];
@@ -231,12 +337,12 @@ function LiveStroke({ points, inkOptions, strategies, debug }: {
   if (live === null) return null;
   return (
     <>
-      <g>{drawLine(renderInk(live, inkOptions, Infinity), 'live-ink', INK_COLOR)}</g>
+      <g>{drawLine(renderInk(live, inkOptions, Infinity, true), "live-ink", INK_COLOR)}</g>
       {strategies.map(({ def, param }) => (
         <g key={`live-${def.id}`}>
-          {def.id === 'debug'
-            ? drawDebug(live, inkOptions, Infinity, 'live-dbg', debug)
-            : drawLine(def.render(live, param, Infinity), 'live', def.color)}
+          {def.id === "debug"
+            ? drawDebug(live, inkOptions, Infinity, true, "live-dbg", debug)
+            : drawLine(def.render(live, param, Infinity), "live", def.color)}
         </g>
       ))}
     </>
@@ -262,7 +368,12 @@ export function App() {
   const hover = useSignal<HoverPick | null>(null);
 
   // Stop the draw loop if we unmount mid-stroke.
-  useEffect(() => () => { if (drawLoopRef.current !== null) cancelAnimationFrame(drawLoopRef.current); }, []);
+  useEffect(
+    () => () => {
+      if (drawLoopRef.current !== null) cancelAnimationFrame(drawLoopRef.current);
+    },
+    [],
+  );
 
   // --- Pointer / drawing ---
 
@@ -279,7 +390,7 @@ export function App() {
     }
 
     const pt = view.svgToContent(e.clientX, e.clientY);
-    const now = clock.getElapsedFromTs(e.timeStamp)
+    const now = clock.getElapsedFromTs(e.timeStamp);
     hover.value = null;
     clock.penDown(now);
     currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: now }];
@@ -290,7 +401,10 @@ export function App() {
   // a trailing "tip" point at (last position, now).
   function drawFrame() {
     const rec = currentStrokeRef.current;
-    if (rec === null) { drawLoopRef.current = null; return; }
+    if (rec === null) {
+      drawLoopRef.current = null;
+      return;
+    }
     const last = rec[rec.length - 1];
     livePoints.value = [...rec, { x: last.x, y: last.y, t: clock.getElapsed() }];
     drawLoopRef.current = requestAnimationFrame(drawFrame);
@@ -298,7 +412,10 @@ export function App() {
 
   function handlePointerMove(e: PointerEvent) {
     const rec = currentStrokeRef.current;
-    if (rec === null) { updateHover(e); return; }
+    if (rec === null) {
+      updateHover(e);
+      return;
+    }
 
     const pt = view.svgToContent(e.clientX, e.clientY);
     const last = rec[rec.length - 1];
@@ -312,10 +429,13 @@ export function App() {
   function commitStroke(e: PointerEvent) {
     const rec = currentStrokeRef.current;
     if (rec === null) return;
-    if (drawLoopRef.current !== null) { cancelAnimationFrame(drawLoopRef.current); drawLoopRef.current = null; }
+    if (drawLoopRef.current !== null) {
+      cancelAnimationFrame(drawLoopRef.current);
+      drawLoopRef.current = null;
+    }
     // Capture the pointer-up point (final position + release time) so every
     // stroke has >= 2 points and the end dwell is recorded.
-    const now = clock.getElapsedFromTs(e.timeStamp)
+    const now = clock.getElapsedFromTs(e.timeStamp);
 
     const last = rec[rec.length - 1];
     const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: now }];
@@ -345,7 +465,13 @@ export function App() {
     let best: HoverPick | null = null;
     for (const s of strokes) {
       if (s[0].t > t || !nearCursor(s, x, y, pad)) continue;
-      const hit = pickStagePoint(strokeStages(s, inkOptions, t), debug, x, y, reach);
+      const hit = pickStagePoint(
+        strokeStages(s, inkOptions, t, withinStroke(s, t)),
+        debug,
+        x,
+        y,
+        reach,
+      );
       if (hit === null) continue;
       // Every later stroke now has to beat this one to take the readout.
       reach = hit.d;
@@ -359,13 +485,16 @@ export function App() {
   // The document, not the capture: what is drawn is what a file would hold.
   const strokes = store.strokes.value;
   const activeStrategies = useMemo(() => getActiveStrategies(strategies), [strategies]);
-  const primaryStrategy: ActiveStrategy = activeStrategies[0] ?? { def: STRATEGY_DEFS[0], param: 0 };
+  const primaryStrategy: ActiveStrategy = activeStrategies[0] ?? {
+    def: STRATEGY_DEFS[0],
+    param: 0,
+  };
 
   // The readout only exists where its circles do: debug overlay on, and at least
   // one layer that carries a radius. Anything that can move the ink out from
   // under a parked cursor (playback, or the layers going away) drops it, since
   // nothing else will fire until the pointer moves again.
-  const hoverOn = activeStrategies.some(({ def }) => def.id === 'debug') && hasRadiusLayer(debug);
+  const hoverOn = activeStrategies.some(({ def }) => def.id === "debug") && hasRadiusLayer(debug);
   useEffect(() => {
     if (!hoverOn || clock.isPlaying) hover.value = null;
   }, [hoverOn, clock.isPlaying]);
@@ -388,50 +517,75 @@ export function App() {
     for (let i = 0; i < strokes.length; i += INK_CHUNK) {
       const chunk = strokes.slice(i, i + INK_CHUNK);
       const old = prev[next.length];
-      next.push(old && sameStrokes(old.strokes, chunk)
-        ? old
-        : { strokes: chunk, settled: computed(() => countSettled(chunk, clock.elapsed)) });
+      next.push(
+        old && sameStrokes(old.strokes, chunk)
+          ? old
+          : { strokes: chunk, settled: computed(() => countSettled(chunk, clock.elapsed)) },
+      );
     }
     bandsRef.current = next;
     return next;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strokes]);
   const overlayLayer = activeStrategies.map(({ def, param }) => (
-    <OverlayStrategy key={def.id} def={def} param={param} strokes={strokes}
-      elapsed={clock.elapsed} inkOptions={inkOptions} debug={debug} cache={overlayCache} />
+    <OverlayStrategy
+      key={def.id}
+      def={def}
+      param={param}
+      strokes={strokes}
+      elapsed={clock.elapsed}
+      inkOptions={inkOptions}
+      debug={debug}
+      cache={overlayCache}
+    />
   ));
 
   return (
     <svg
       ref={view.svgRef}
       id="canvas-svg"
-      class={clock.isRecording ? 'live' : ''}
+      class={clock.isRecording ? "live" : ""}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={commitStroke}
       onPointerCancel={commitStroke}
-      onPointerLeave={() => { hover.value = null; }}
+      onPointerLeave={() => {
+        hover.value = null;
+      }}
       // stylus long press
       onContextMenu={(e) => e.preventDefault()}
     >
       <g transform={view.transform}>
-
         {/* Committed strokes: settled (cached) + the strokes straddling the
             playhead, ink base then overlay curves */}
         {bands.map((band, ci) => (
-          <InkBand key={ci} strokes={band.strokes} settled={band.settled}
-            elapsed={clock.elapsed} inkOptions={inkOptions} cache={inkCache} />
+          <InkBand
+            key={ci}
+            strokes={band.strokes}
+            settled={band.settled}
+            elapsed={clock.elapsed}
+            inkOptions={inkOptions}
+            cache={inkCache}
+          />
         ))}
         <ActiveInk strokes={strokes} elapsed={clock.elapsed} inkOptions={inkOptions} />
         {overlayLayer}
 
         {/* Active stroke highlight (under the playhead, while not recording) */}
-        <ActiveHighlight strokes={strokes} elapsed={clock.elapsed}
-          isIdle={clock.isIdle} primary={primaryStrategy} />
+        <ActiveHighlight
+          strokes={strokes}
+          elapsed={clock.elapsed}
+          isIdle={clock.isIdle}
+          primary={primaryStrategy}
+        />
 
         {/* In-progress stroke */}
-        <LiveStroke points={livePoints} inkOptions={inkOptions}
-          strategies={activeStrategies} debug={debug} />
+        <LiveStroke
+          points={livePoints}
+          inkOptions={inkOptions}
+          strategies={activeStrategies}
+          debug={debug}
+        />
 
         {/* Radius readout: the ring rides the canvas, the label rides the cursor */}
         <HoverRing hover={hover} />

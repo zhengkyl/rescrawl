@@ -1,4 +1,4 @@
-import type { RenderedLine } from '../curves';
+import type { RenderedLine } from "../curves";
 
 // One renderer's output for one stroke, as SVG primitives: fill the shapes if
 // present (variable width), otherwise stroke the centreline curve. Shared by the
@@ -13,7 +13,14 @@ export function drawLine(line: RenderedLine, key: string | number, color: string
     ));
   }
   return (
-    <path key={key} d={line.curve} stroke={color} stroke-width={line.width}
-      fill="none" stroke-linecap="round" stroke-linejoin="round" />
+    <path
+      key={key}
+      d={line.curve}
+      stroke={color}
+      stroke-width={line.width}
+      fill="none"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
   );
 }

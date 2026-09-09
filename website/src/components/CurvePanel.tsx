@@ -1,8 +1,8 @@
-import { useApp } from '../context';
-import { DEBUG_EXTRAS, DEBUG_STAGES, inkStages, STRATEGY_DEFS } from '../curves';
-import type { DebugLayers } from '../curves';
-import { useStrokes } from '../strokeStore';
-import { activeStrokeAt, withinStroke } from '../utils';
+import { useApp } from "../context";
+import { DEBUG_EXTRAS, DEBUG_STAGES, inkStages, STRATEGY_DEFS } from "../curves";
+import type { DebugLayers } from "../curves";
+import { useStrokes } from "../strokeStore";
+import { activeStrokeAt, withinStroke } from "../utils";
 
 // How many points survive each stage, for the stroke under the playhead (or the
 // last one drawn). This is the readout that makes the pipeline's order legible:
@@ -17,7 +17,8 @@ function StageCounts() {
 
   const i = activeStrokeAt(strokes, t) ?? strokes.length - 1;
   const stroke = strokes[i];
-  const { outline, stages } = inkStages(stroke, inkOptions, withinStroke(stroke, t) ? t : Infinity);
+  const live = withinStroke(stroke, t);
+  const { outline, stages } = inkStages(stroke, inkOptions, live ? t : Infinity, live);
 
   return (
     <div class="stage-counts">
@@ -37,7 +38,13 @@ function StageCounts() {
   );
 }
 
-function LayerToggle({ k, label, color, debug, onChange }: {
+function LayerToggle({
+  k,
+  label,
+  color,
+  debug,
+  onChange,
+}: {
   k: keyof DebugLayers;
   label: string;
   color: string;
@@ -71,16 +78,16 @@ export function CurvePanel() {
   }
 
   return (
-    <>
-      <div class="section-label">Curve Rendering</div>
-      {STRATEGY_DEFS.map(def => {
+    <div class="panel-section">
+      <div class="section-label">Overlays</div>
+      {STRATEGY_DEFS.map((def) => {
         const state = strategies[def.id] ?? { enabled: false, param: def.defaultParam };
         return (
           <div key={def.id}>
             <div class="strategy-row">
               <button
                 class="strategy-toggle"
-                style={state.enabled ? `background:${def.color};color:#fff` : ''}
+                style={state.enabled ? `background:${def.color};color:#fff` : ""}
                 onClick={() => toggle(def.id)}
                 title={def.id}
               >
@@ -102,16 +109,28 @@ export function CurvePanel() {
             </div>
             {/* Pipeline stages first, in the order they run, then the derived
                 geometry. Same order as the counts below them. */}
-            {def.id === 'debug' && state.enabled && (
+            {def.id === "debug" && state.enabled && (
               <div class="debug-layers">
                 {DEBUG_STAGES.map(({ key, label, color }) => (
-                  <LayerToggle key={key} k={key} label={label} color={color}
-                    debug={debug} onChange={onDebugChange} />
+                  <LayerToggle
+                    key={key}
+                    k={key}
+                    label={label}
+                    color={color}
+                    debug={debug}
+                    onChange={onDebugChange}
+                  />
                 ))}
                 <div class="debug-sep" />
                 {DEBUG_EXTRAS.map(({ key, label, color }) => (
-                  <LayerToggle key={key} k={key} label={label} color={color}
-                    debug={debug} onChange={onDebugChange} />
+                  <LayerToggle
+                    key={key}
+                    k={key}
+                    label={label}
+                    color={color}
+                    debug={debug}
+                    onChange={onDebugChange}
+                  />
                 ))}
                 <StageCounts />
               </div>
@@ -119,6 +138,6 @@ export function CurvePanel() {
           </div>
         );
       })}
-    </>
+    </div>
   );
 }

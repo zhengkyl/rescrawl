@@ -1,15 +1,15 @@
 {
-	"name": "lab",
-	"private": true,
-	"type": "module",
-	"scripts": {
-		"dev": "vite"
-	},
-	"devDependencies": {
-		"typescript": "^6.0.2",
-		"vite": "^7.3.1"
-	},
-	"dependencies": {
-		"rescrawl": "workspace:*"
-	}
+  "name": "lab",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite"
+  },
+  "dependencies": {
+    "rescrawl": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2",
+    "vite": "^7.3.1"
+  }
 }

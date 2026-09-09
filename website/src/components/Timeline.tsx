@@ -1,21 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { useApp } from '../context';
-import { useStrokes } from '../strokeStore';
-import type { Stroke } from '../utils';
-import { activeStrokeAt, strokeEnd, strokeStart } from '../utils';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useApp } from "../context";
+import { useStrokes } from "../strokeStore";
+import type { Stroke } from "../utils";
+import { activeStrokeAt, strokeEnd, strokeStart } from "../utils";
 
 // Time scale, in px per second — the timeline's zoom, like a video editor track.
 // Ctrl+scroll rescales about the cursor; the track otherwise just grows wider and
 // scrolls as the recording's duration increases.
 const DEFAULT_PX_PER_SEC = 120;
-const MIN_PX_PER_SEC = 4;    // ~4 minutes across a 1000px track
+const MIN_PX_PER_SEC = 4; // ~4 minutes across a 1000px track
 const MAX_PX_PER_SEC = 4000; // 4px per ms, for ms-level stroke timing
-const END_PAD = 240;      // trailing space (px) so the end isn't flush to the edge
+const END_PAD = 240; // trailing space (px) so the end isn't flush to the edge
 const FOLLOW_MARGIN = 48; // keep the playhead this far inside the right edge
 
-const RULER_H = 16;       // ruler/label band height (px)
-const LANE_H = 12;        // vertical pitch of a stacked-stroke lane (px)
-const BAND_PAD = 6;       // gap between ruler and the first lane (px)
+const RULER_H = 16; // ruler/label band height (px)
+const LANE_H = 12; // vertical pitch of a stacked-stroke lane (px)
+const BAND_PAD = 6; // gap between ruler and the first lane (px)
 
 const clampScale = (s: number) => Math.max(MIN_PX_PER_SEC, Math.min(MAX_PX_PER_SEC, s));
 
@@ -26,17 +26,18 @@ type Span = { index: number; start: number; end: number; lane: number };
 // into the first lane whose previous stroke has already ended.
 function layoutLanes(strokes: Stroke[]): { spans: Span[]; lanes: number } {
   const spans: Span[] = strokes.map((st, index) => {
-
-    const start = strokeStart(st)
-    const end = strokeEnd(st)
+    const start = strokeStart(st);
+    const end = strokeEnd(st);
     return { index, start, end, lane: 0 };
   });
   const order = [...spans].sort((a, b) => a.start - b.start);
   const laneEnds: number[] = [];
   for (const s of order) {
     let lane = laneEnds.findIndex((end) => end <= s.start);
-    if (lane === -1) { lane = laneEnds.length; laneEnds.push(s.end); }
-    else laneEnds[lane] = s.end;
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(s.end);
+    } else laneEnds[lane] = s.end;
     s.lane = lane;
   }
   return { spans, lanes: Math.max(1, laneEnds.length) };
@@ -50,7 +51,9 @@ const RING_C = 12;
 const RING_SIZE = RING_C * 2;
 function graceArc(frac: number): string {
   frac = Math.max(0, Math.min(1, frac));
-  const cx = RING_C, cy = RING_C, r = RING_R;
+  const cx = RING_C,
+    cy = RING_C,
+    r = RING_R;
   if (frac >= 1) return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r}`;
   const ang = frac * 2 * Math.PI;
   const x1 = cx + r * Math.sin(ang);
@@ -69,7 +72,9 @@ const MIN_TICK_PX = 64; // narrowest gap that still fits a label
 // Coarsest-first is wrong here: we want the *finest* spacing whose labels don't
 // collide, so walk from the bottom and take the first that clears MIN_TICK_PX.
 function tickStep(pxPerSec: number): number {
-  return TICK_STEPS.find((step) => step * pxPerSec >= MIN_TICK_PX) ?? TICK_STEPS[TICK_STEPS.length - 1];
+  return (
+    TICK_STEPS.find((step) => step * pxPerSec >= MIN_TICK_PX) ?? TICK_STEPS[TICK_STEPS.length - 1]
+  );
 }
 
 // Sub-second ticks need decimals; whole-second ones would only show a noisy ".0".
@@ -80,7 +85,7 @@ function formatTime(ms: number, decimals = 0): string {
   const m = Math.floor(total / 60);
   const s = (total - m * 60).toFixed(decimals);
   // "12.34" needs 5 chars to keep 1:05.5 from rendering as 1:5.5.
-  return m > 0 ? `${m}:${s.padStart(decimals > 0 ? decimals + 3 : 2, '0')}` : `${s}s`;
+  return m > 0 ? `${m}:${s.padStart(decimals > 0 ? decimals + 3 : 2, "0")}` : `${s}s`;
 }
 
 // The timeline re-renders every frame (live head while recording, playhead while
@@ -127,19 +132,41 @@ function firstFreeLane(spans: Span[], start: number, end: number): number {
   return lane;
 }
 
-function StrokesLayer({ spans, lanes, selected, live, pxPerMs }: { spans: Span[]; lanes: number; selected: number | null; live: LiveSpan | null; pxPerMs: number }) {
+function StrokesLayer({
+  spans,
+  lanes,
+  selected,
+  live,
+  pxPerMs,
+}: {
+  spans: Span[];
+  lanes: number;
+  selected: number | null;
+  live: LiveSpan | null;
+  pxPerMs: number;
+}) {
   // Committed segments only change between strokes (or a rescale), so don't
   // rebuild them on every live frame while a stroke is being drawn.
   const committed = useMemo(
-    () => spans.map((s) => (
-      <div key={s.index} class={`timeline-stroke${s.index === selected ? ' is-selected' : ''}`} style={segmentStyle(s.start, s.end, s.lane, pxPerMs)} />
-    )),
+    () =>
+      spans.map((s) => (
+        <div
+          key={s.index}
+          class={`timeline-stroke${s.index === selected ? " is-selected" : ""}`}
+          style={segmentStyle(s.start, s.end, s.lane, pxPerMs)}
+        />
+      )),
     [spans, selected, pxPerMs],
   );
   return (
     <div class="timeline-strokes" style={{ height: `${lanes * LANE_H}px` }}>
       {committed}
-      {live && <div class="timeline-stroke is-live" style={segmentStyle(live.start, live.end, live.lane, pxPerMs)} />}
+      {live && (
+        <div
+          class="timeline-stroke is-live"
+          style={segmentStyle(live.start, live.end, live.lane, pxPerMs)}
+        />
+      )}
     </div>
   );
 }
@@ -174,9 +201,10 @@ export function Timeline() {
   const activeStart = clock.activeStart();
 
   // The stroke currently being drawn grows from its start to the live head.
-  const liveSpan: LiveSpan | null = activeStart !== null
-    ? { start: activeStart, end: Math.max(activeStart, elapsed), lane: 0 }
-    : null;
+  const liveSpan: LiveSpan | null =
+    activeStart !== null
+      ? { start: activeStart, end: Math.max(activeStart, elapsed), lane: 0 }
+      : null;
   if (liveSpan) liveSpan.lane = firstFreeLane(layout.spans, liveSpan.start, liveSpan.end);
   const displayLanes = Math.max(layout.lanes, liveSpan ? liveSpan.lane + 1 : 0);
   const trackHeight = Math.max(44, RULER_H + BAND_PAD + displayLanes * LANE_H + BAND_PAD);
@@ -199,7 +227,7 @@ export function Timeline() {
   const playedX = activeStart !== null ? playheadX : Math.min(playheadX, tentativeX);
 
   function seekFromEvent(e: PointerEvent) {
-    const content = trackRef.current!.querySelector('.timeline-content');
+    const content = trackRef.current!.querySelector(".timeline-content");
     if (!content) return;
     const rect = content.getBoundingClientRect();
     const ms = (e.clientX - rect.left) / pxPerMs;
@@ -224,7 +252,7 @@ export function Timeline() {
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
   }
 
-  // Ctrl+scroll rescales about the cursor 
+  // Ctrl+scroll rescales about the cursor
   // A plain wheel scrolls the track horizontally
   // Bound imperatively for `passive: false`
   // both branches need preventDefault to beat page zoom/scroll.
@@ -242,8 +270,8 @@ export function Timeline() {
       anchorRef.current = { ms: (track.scrollLeft + offsetX) / pxPerMsRef.current, offsetX };
       setPxPerSec((s) => clampScale(s * Math.pow(1.001, -e.deltaY)));
     }
-    track.addEventListener('wheel', onWheel, { passive: false });
-    return () => track.removeEventListener('wheel', onWheel);
+    track.addEventListener("wheel", onWheel, { passive: false });
+    return () => track.removeEventListener("wheel", onWheel);
   }, []);
 
   useLayoutEffect(() => {
@@ -276,9 +304,15 @@ export function Timeline() {
   const activeStroke = isRecording ? null : activeStrokeAt(strokes, elapsed);
 
   return (
-    <div class={`timeline${isRecording ? ' is-live' : ''}`}>
+    <div class={`timeline${isRecording ? " is-live" : ""}`}>
       <div class="timeline-header">
-        <button id="btn-play" disabled={!canPlay} onClick={isPlaying ? clock.pause : clock.startPlayback}>{isPlaying ? '⏸' : '▶'}</button>
+        <button
+          id="btn-play"
+          disabled={!canPlay}
+          onClick={isPlaying ? clock.pause : clock.startPlayback}
+        >
+          {isPlaying ? "⏸" : "▶"}
+        </button>
         <div class="timeline-readout">
           {formatTime(elapsed)} / {formatTime(duration)}
         </div>
@@ -287,10 +321,14 @@ export function Timeline() {
           title="Time scale (Ctrl+scroll) — click to reset"
           onClick={() => setPxPerSec(DEFAULT_PX_PER_SEC)}
         >
-          {(pxPerSec / DEFAULT_PX_PER_SEC).toFixed(2).replace(/\.?0+$/, '')}&times;
+          {(pxPerSec / DEFAULT_PX_PER_SEC).toFixed(2).replace(/\.?0+$/, "")}&times;
         </span>
       </div>
-      <div class={`timeline-track${empty ? ' is-empty' : ''}`} ref={trackRef} style={{ height: `${trackHeight}px` }}>
+      <div
+        class={`timeline-track${empty ? " is-empty" : ""}`}
+        ref={trackRef}
+        style={{ height: `${trackHeight}px` }}
+      >
         <div
           class="timeline-content"
           style={{ width: `${contentWidth}px` }}
@@ -299,7 +337,13 @@ export function Timeline() {
           onPointerUp={onPointerUp}
         >
           <Ruler duration={duration} pxPerMs={pxPerMs} />
-          <StrokesLayer spans={layout.spans} lanes={displayLanes} selected={activeStroke} live={liveSpan} pxPerMs={pxPerMs} />
+          <StrokesLayer
+            spans={layout.spans}
+            lanes={displayLanes}
+            selected={activeStroke}
+            live={liveSpan}
+            pxPerMs={pxPerMs}
+          />
           <div class="timeline-played" style={{ width: `${playedX}px` }} />
           {showTentative && (
             <div
@@ -312,9 +356,27 @@ export function Timeline() {
           )}
           <div class="timeline-playhead" style={{ left: `${playheadX}px` }}>
             {isRecording ? (
-              <svg class="timeline-grace" width={RING_SIZE} height={RING_SIZE} viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}>
-                <circle cx={RING_C} cy={RING_C} r={RING_R} fill="none" stroke="rgba(0,0,0,0.45)" stroke-width="3" />
-                <path d={graceArc(clock.graceFraction())} fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
+              <svg
+                class="timeline-grace"
+                width={RING_SIZE}
+                height={RING_SIZE}
+                viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+              >
+                <circle
+                  cx={RING_C}
+                  cy={RING_C}
+                  r={RING_R}
+                  fill="none"
+                  stroke="rgba(0,0,0,0.45)"
+                  stroke-width="3"
+                />
+                <path
+                  d={graceArc(clock.graceFraction())}
+                  fill="none"
+                  stroke="#ef4444"
+                  stroke-width="3"
+                  stroke-linecap="round"
+                />
               </svg>
             ) : (
               <div class="timeline-playhead-handle" />

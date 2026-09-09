@@ -37,7 +37,7 @@ The pipeline renders **while the pen is down**, on a growing prefix, over and ov
 
 Decimation does not, so it is **not a pipeline stage**. It is a finalize pass (`compressStroke`) run once per complete stroke, on the way to a file.
 
-Douglas–Peucker is the specific offender, and a smaller tolerance does not fix it, because the tolerance is not what is wrong. DP never *moves* a point — it only selects — so the failure is subtler than drift: the **selection** changes as the stroke grows, and points the ink was already drawn through get dropped once a later sample makes them redundant. On a 300-sample test stroke, the first 240 samples decimate to a set holding 4 points the finished stroke does not keep. Each of those is a place where the curve re-settles behind the pen, and the radii shift with it, since stage 1 reads speed between neighbours that are no longer the same neighbours. The same thing breaks replay: a time-clipped prefix would decimate differently than the same prefix of the finished stroke, so a stroke would draw as one shape and end as another.
+Douglas–Peucker is the specific offender, and a smaller tolerance does not fix it, because the tolerance is not what is wrong. DP never _moves_ a point — it only selects — so the failure is subtler than drift: the **selection** changes as the stroke grows, and points the ink was already drawn through get dropped once a later sample makes them redundant. On a 300-sample test stroke, the first 240 samples decimate to a set holding 4 points the finished stroke does not keep. Each of those is a place where the curve re-settles behind the pen, and the radii shift with it, since stage 1 reads speed between neighbours that are no longer the same neighbours. The same thing breaks replay: a time-clipped prefix would decimate differently than the same prefix of the finished stroke, so a stroke would draw as one shape and end as another.
 
 If a streaming decimator is wanted in the pipeline, it has to come from the local sequential family — Reumann–Witkam's directional corridor, or Opheim with its distance bounds — not a global fit.
 
@@ -45,7 +45,7 @@ Keeping it out of the renderer costs nothing, because the app applies it where c
 
 ### Why the finalize pass is idempotent
 
-It snaps onto a decimal grid *before* it decimates. A snap is idempotent alone, and so is DP — its recursion depends only on the deviation of the points it keeps from the chord between two kept endpoints, and dropping the others changes neither — but decimating *before* snapping is not, because the snap then nudges survivors across the tolerance and the next pass drops a different set. Re-exporting an imported file changes nothing, however many times it happens. (The greedy anchor walk this replaced was not idempotent at all: its runs extend further once the points that broke them are gone, so every save lost a little more.)
+It snaps onto a decimal grid _before_ it decimates. A snap is idempotent alone, and so is DP — its recursion depends only on the deviation of the points it keeps from the chord between two kept endpoints, and dropping the others changes neither — but decimating _before_ snapping is not, because the snap then nudges survivors across the tolerance and the next pass drops a different set. Re-exporting an imported file changes nothing, however many times it happens. (The greedy anchor walk this replaced was not idempotent at all: its runs extend further once the points that broke them are gone, so every save lost a little more.)
 
 Deviation is measured against the chord parameterized by **time**, not arc length. Everything downstream derives from speed, so a dropped sample must not change how fast the pen appears to have moved. A dwell falls out of it for free and losslessly — the pen is not moving, so the whole pause collapses to its two ends, and stage 1 cannot tell the difference because it smooths in log space toward a constant target.
 
@@ -61,7 +61,7 @@ Three things keep it to one file rather than one per stroke:
 - **One shared `animation-duration`**, equal to the whole cycle including the hold. Per-stroke durations plus delays desync on a loop, because each stroke then repeats on its own period.
 - **A per-stroke `linear()` easing** carrying everything else: when the stroke starts (a flat run at 0), how the pen actually moved — accelerations, and dwells as flat runs mid-curve — and that it stays finished until the loop comes round (a flat run at 1). Timing fidelity that would otherwise need per-stroke keyframes, for a handful of numbers.
 
-Path data is emitted relative, with implied command letters, trimmed numbers and dropped separators. Relative deltas are measured from the position *as the parser will compute it* — the running sum of the rounded deltas — so rounding error stays inside half a grid step instead of drifting with path length.
+Path data is emitted relative, with implied command letters, trimmed numbers and dropped separators. Relative deltas are measured from the position _as the parser will compute it_ — the running sum of the rounded deltas — so rounding error stays inside half a grid step instead of drifting with path length.
 
 Decimals kept in path data is by far the largest size lever; the timing tolerance is about fidelity and barely moves the file. On curvy strokes `splineOutline` is both more accurate and smaller, since `toOutline` pays about four contacts per centerline point while the spline sampler adapts.
 
@@ -79,7 +79,7 @@ The reference ouput is a pen on paper, or a high polling rate pen in a drawing a
 
 idea 1: an pointermove event implies a movement taking framegap=1/framerate time units. The remaining time gap was spent stationary before move. (Should movement time be framegap or framegap/2? move -1/2 and stop + 1/2 is closer mathematically, but practically?).
 
-perfect freehand only keeps start and end points unmodified. All middle points are a fixed lerp between current raw sample and previous stored point. There is always a gap between pen and point, but it's "bounded" and scales with distance between samples. Given a lerp constant of t, 0 < t < 1,  and n + 1 equally spaced samples, the lag gap is exactly t + t ^2 + t^3 + ... t^n which has limit of 1/(1-t). The gap decreases as samples become closer and increases as samples become farther apart, so most noticeable for large t and accelerating movement. For straight lines is fine, but it unavoidably reduces length of curves. Arc length is reduced by very roughly one lag gap per sample in curve in worst case (fast tight curves).
+perfect freehand only keeps start and end points unmodified. All middle points are a fixed lerp between current raw sample and previous stored point. There is always a gap between pen and point, but it's "bounded" and scales with distance between samples. Given a lerp constant of t, 0 < t < 1, and n + 1 equally spaced samples, the lag gap is exactly t + t ^2 + t^3 + ... t^n which has limit of 1/(1-t). The gap decreases as samples become closer and increases as samples become farther apart, so most noticeable for large t and accelerating movement. For straight lines is fine, but it unavoidably reduces length of curves. Arc length is reduced by very roughly one lag gap per sample in curve in worst case (fast tight curves).
 
 curve fitting is a bad fit for realtime streaming. We need all historical points to be fixed once rendered, so only a small buffer of samples can be fitted and a buffer delays rendering by a number of samples, not time.
 
@@ -91,5 +91,3 @@ Adding small deadzone before adding new points. perfect-freehand does this. Esse
 
 What if use window symmetric in time, not samples
 average with partial samples?
-
-

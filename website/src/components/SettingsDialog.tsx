@@ -1,6 +1,6 @@
-import { useRef, useEffect } from 'preact/hooks';
-import { useApp } from '../context';
-import { DEFAULT_CONFIG } from '../utils';
+import { useRef, useEffect } from "preact/hooks";
+import { useApp } from "../context";
+import { DEFAULT_CONFIG } from "../utils";
 
 export function SettingsDialog() {
   const { config, setConfig, settingsOpen: open, setSettingsOpen } = useApp();
@@ -22,14 +22,24 @@ export function SettingsDialog() {
             type="checkbox"
             id="chk-sidebar-right"
             checked={config.sidebarRight}
-            onChange={(e) => setConfig(c => ({ ...c, sidebarRight: (e.target as HTMLInputElement).checked }))}
-          />
-          {' '}Sidebar on right
+            onChange={(e) =>
+              setConfig((c) => ({ ...c, sidebarRight: (e.target as HTMLInputElement).checked }))
+            }
+          />{" "}
+          Sidebar on right
         </label>
       </div>
       <div class="dialog-actions">
-        <button type="button" id="btn-settings-reset" onClick={() => setConfig({ ...DEFAULT_CONFIG })}>Reset to defaults</button>
-        <button type="button" id="settings-close" onClick={onClose}>Close</button>
+        <button
+          type="button"
+          id="btn-settings-reset"
+          onClick={() => setConfig({ ...DEFAULT_CONFIG })}
+        >
+          Reset to defaults
+        </button>
+        <button type="button" id="settings-close" onClick={onClose}>
+          Close
+        </button>
       </div>
     </dialog>
   );

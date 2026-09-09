@@ -1,5 +1,5 @@
-import { clamp11, dist } from "./math";
-import type { Contact, Point2 } from "./types";
+import { chordRule, dist } from "./math";
+import type { Contact, FitNode, Point2 } from "./types";
 
 // --- path emission ---
 //
@@ -130,20 +130,36 @@ export function centerlinePath(pts: Point2[], digits = DEFAULT_DIGITS): string {
   return pen.toString();
 }
 
-// The chord rule: the full Hermite tangent length for a cubic between two
-// contacts is the chord times `sec²(turn/4)` — the factor that makes a cubic
-// reproduce a circular arc of that turn. It is 1 when the tangents are
-// parallel, so a straight run emits its chord exactly, and 1.172 across a
-// quarter turn.
+// The chord rule between two contacts -- see `chordRule`.
 export function hermiteMag(a: Contact, b: Contact): number {
-  // cos(turn/2) by half angle, so sec²(turn/4) needs no trig of its own.
-  const half = Math.sqrt((1 + clamp11(a.tx * b.tx + a.ty * b.ty)) / 2);
-  return (dist(a, b) * 2) / (1 + half);
+  return chordRule(dist(a, b), a.tx, a.ty, b.tx, b.ty);
+}
+
+// The fitted centerline as it was fitted: a line where the fit said line, a
+// cubic on the stored tangents where it said cubic. Unlike `centerlinePath`,
+// this one is faithful; it is the fit engine's `spine`.
+export function fitPath(ns: FitNode[], digits = DEFAULT_DIGITS): string {
+  if (ns.length === 0) return "";
+  const pen = new Pen(digits);
+  pen.moveTo(ns[0].x, ns[0].y);
+  for (let i = 1; i < ns.length; i++) {
+    const a = ns[i - 1];
+    const b = ns[i];
+    if (a.mo === 0 && b.mi === 0) {
+      pen.lineTo(b.x, b.y);
+      continue;
+    }
+    const ka = a.mo / 3;
+    const kb = b.mi / 3;
+    pen.curveTo(a.x + a.ox * ka, a.y + a.oy * ka, b.x - b.ix * kb, b.y - b.iy * kb, b.x, b.y);
+  }
+  return pen.toString();
 }
 
 // One cubic per pair. Each end's Hermite tangent is the stored unit tangent
-// scaled by the contact's own `m` if it has one, else by the chord rule.
-// Bezier control points sit at a third of the Hermite tangent.
+// scaled by the contact's own magnitude for that side if it has one (`mOut`
+// leaving, `mIn` arriving, `m` for either), else by the chord rule. Bezier
+// control points sit at a third of the Hermite tangent.
 export function outlinePath(cs: Contact[], digits = DEFAULT_DIGITS): string {
   const n = cs.length;
   if (n < 2) return "";
@@ -153,8 +169,8 @@ export function outlinePath(cs: Contact[], digits = DEFAULT_DIGITS): string {
     const a = cs[i],
       b = cs[(i + 1) % n];
     const m = hermiteMag(a, b);
-    const ka = (a.m ?? m) / 3;
-    const kb = (b.m ?? m) / 3;
+    const ka = (a.mOut ?? a.m ?? m) / 3;
+    const kb = (b.mIn ?? b.m ?? m) / 3;
     pen.curveTo(a.x + a.tx * ka, a.y + a.ty * ka, b.x - b.tx * kb, b.y - b.ty * kb, b.x, b.y);
   }
   pen.close();
