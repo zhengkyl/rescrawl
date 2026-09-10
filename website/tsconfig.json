@@ -16,5 +16,7 @@
       "react-dom": ["./node_modules/preact/compat/"]
     }
   },
-  "include": ["node_modules/vite/client.d.ts", "**/*"]
+  // src only: vite.config.ts pulls in types that reach @types/node, which
+  // then wins the DOM's setTimeout and hands back a NodeJS.Timeout.
+  "include": ["node_modules/vite/client.d.ts", "src/**/*"]
 }

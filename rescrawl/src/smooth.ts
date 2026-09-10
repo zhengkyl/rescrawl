@@ -1,19 +1,11 @@
 import type { Point4, RenderOptions } from "./types.ts";
 
-// --- stage 2 of 4: moving average over position ---
+// Stage 2: moving average over x/y only -- stage 1 already smoothed the radius.
 //
-// Radii are already smoothed by stage 1, so only x/y are filtered here; the
-// radius just rides along and this is where Point3 becomes Point4.
-//
-// The window is odd and centred, and near either end it shrinks to the largest
-// symmetric window that still fits — so every input point produces an output
-// point, and the two endpoints pass through untouched. A fixed window would
-// instead have to drop the `windowRadius` points at each end, which detaches the
-// stroke from where the pen actually started and stopped.
-//
-// `smoothWindow` 0 or 1 is no smoothing, which is the default: stage 1 already
-// smooths the radius, and the fit's own tolerance absorbs most position noise,
-// so this is a knob to reach for rather than a pass to run by default.
+// The window shrinks near either end to the largest symmetric one that fits, so
+// every input point produces an output and the endpoints pass through
+// untouched; a fixed window would drop points at each end and detach the stroke
+// from where the pen actually started. 0 or 1 is off, and off is the default.
 export function smoothPositions(points: Point4[], o: Required<RenderOptions>): Point4[] {
   const n = points.length;
   // Off by default, and off is the hot path: hand the same points straight

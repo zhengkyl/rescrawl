@@ -2,9 +2,8 @@
 
 export { chordRule, clamp11, dist, lerp, TAU, wrapPi } from "./math.ts";
 export { ENGINES, type Engine, type Shape } from "./engine.ts";
-export { fitCurve, fitEngine, toOutlineFit } from "./fit.ts";
+export { fitCurve } from "./fit.ts";
 export { greedyEngine, toOutlineGreedy } from "./greedy.ts";
-export { sampledEngine, toOutlineSampled } from "./sampled.ts";
 export { centerlineStages, renderStroke } from "./pipeline.ts";
 export { toRadiiPointsFromRawSamples } from "./radius.ts";
 export { dropContained } from "./simplify.ts";

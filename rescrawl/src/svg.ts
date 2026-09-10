@@ -1,28 +1,15 @@
 import { chordRule, dist } from "./math.ts";
 import type { Contact, FitNode, Point2 } from "./types.ts";
 
-// --- path emission ---
+// One builder for all path data, applying the standard size wins: relative
+// commands, implied repeats, trimmed numbers, dropped separators. All are
+// exact-or-better beyond the declared `digits`.
 //
-// Path data is the bulk of any SVG this produces, so it is emitted through one
-// small builder that applies the four standard size wins at once. All four are
-// exact-or-better than what they replace; none of them is a quality tradeoff
-// beyond the declared `digits`.
-//
-//   relative commands   `l 2.4 1.1` instead of `L 481.6 320.7`. Deltas between
-//                       adjacent points are one or two digits where absolute
-//                       coordinates are four or five.
-//   implied commands    a repeated command letter may be dropped, so a polyline
-//                       is one `l` followed by bare number pairs.
-//   trimmed numbers     no trailing zeros, no leading zero on `.5`, `-0` is `0`.
-//   dropped separators  a number starting with `-` or `.` already terminates the
-//                       previous one, so the space between them is not needed.
-//
-// Relative commands have one trap: rounding each delta on its own lets error
-// accumulate along the path, since every delta is measured from a position the
-// parser will never actually be at. So the builder tracks the position AS THE
-// PARSER WILL SEE IT -- the running sum of the rounded deltas -- and measures
-// each new delta from there. Error then stays inside half a grid step for the
-// whole path instead of drifting with its length.
+// The trap in relative commands: rounding each delta on its own accumulates
+// error, since every delta is measured from a position the parser is never
+// actually at. So the builder tracks the position AS THE PARSER SEES IT -- the
+// running sum of rounded deltas -- keeping error inside half a grid step for
+// the whole path instead of drifting with its length.
 
 // Rounded onto a decimal grid; dividing by a power of ten lands on the nearest
 // double to that decimal, so it also serializes as the shortest such string.

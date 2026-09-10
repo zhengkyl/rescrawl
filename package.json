@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "pnpm --filter website dev",
     "test": "node --test rescrawl/test/*.test.ts",
+    "bench": "node rescrawl/test/bench.ts",
     "fmt": "oxfmt"
   },
   "devDependencies": {

@@ -5,7 +5,7 @@ import { useStrokes } from "../strokeStore";
 import { deserialize } from "../utils";
 
 export function Controls() {
-  const { clock, setStrategies, setExportOpen, setSettingsOpen, setBenchOpen } = useApp();
+  const { clock, setStrategies, setExportOpen, setSettingsOpen } = useApp();
   const store = useStrokes();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasStrokes = store.strokes.value.length > 0;
@@ -43,11 +43,6 @@ export function Controls() {
         </button>
         <button id="btn-export" disabled={!hasStrokes} onClick={() => setExportOpen(true)}>
           Export
-        </button>
-      </div>
-      <div class="btn-row">
-        <button id="btn-bench" onClick={() => setBenchOpen(true)}>
-          Jitter bench
         </button>
       </div>
       <input

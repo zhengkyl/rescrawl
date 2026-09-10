@@ -2,17 +2,9 @@ import type { Shape } from "../src/engine.ts";
 import { chordRule, dist } from "../src/math.ts";
 import type { Contact, Point3 } from "../src/types.ts";
 
-// --- test helpers: is the drawn shape sound? ---
-//
-// Every bug worth catching here shows up the same way: some part of the pen's
-// disc ends up outside the outline that is supposed to wrap it. So the checks
-// below reconstruct the polygon the renderer actually emits and ask whether it
-// still contains the ink.
-
-// The outline as `outlinePath` emits it -- one cubic per contact pair, control
-// points at a third of the Hermite tangent -- flattened to a dense polygon.
-// Testing against the contacts alone is not good enough: chords cut across the
-// curve wherever contacts are sparse, and report failures that are not real.
+// The outline as `outlinePath` emits it, flattened to a dense polygon. Testing
+// against the contacts alone reports failures that are not real: chords cut
+// across the curve wherever contacts are sparse.
 export function outlinePolygon(cs: Contact[], step = 0.25): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
   for (let i = 0; i < cs.length; i++) {
@@ -38,8 +30,8 @@ export function outlinePolygon(cs: Contact[], step = 0.25): { x: number; y: numb
   return out;
 }
 
-// Nonzero winding, which is the fill rule the renderer uses: on the inside of a
-// turn the outline folds back over itself, and that fold is filled.
+// Nonzero winding, the fill rule the renderer uses: the fold on the inside of a
+// turn is filled, not punched out.
 export function contains(poly: { x: number; y: number }[], px: number, py: number): boolean {
   let w = 0;
   for (let i = 0; i < poly.length; i++) {
@@ -53,8 +45,7 @@ export function contains(poly: { x: number; y: number }[], px: number, py: numbe
   return w !== 0;
 }
 
-// The smallest fraction of any node's rim the outline contains. 1 means every
-// disc is wrapped; anything less means the shape has cut across the ink.
+// Smallest fraction of any node's rim the outline contains. 1 is sound.
 export function discCoverage(shape: Shape, rim = 32): { worst: number; node: number } {
   const poly = outlinePolygon(shape.outline);
   let worst = 1;
@@ -63,8 +54,7 @@ export function discCoverage(shape: Shape, rim = 32): { worst: number; node: num
     let hit = 0;
     for (let k = 0; k < rim; k++) {
       const a = (2 * Math.PI * k) / rim;
-      // 0.95 of the way out: the rim itself is the boundary, and a point
-      // exactly on it is a coin toss for any winding test.
+      // 0.95 out: a point exactly on the rim is a coin toss for any winding test.
       if (contains(poly, nd.x + Math.cos(a) * nd.r * 0.95, nd.y + Math.sin(a) * nd.r * 0.95)) hit++;
     }
     if (hit / rim < worst) {
@@ -75,8 +65,7 @@ export function discCoverage(shape: Shape, rim = 32): { worst: number; node: num
   return { worst, node };
 }
 
-// `x,y,t;dx,dy,dt;...` -- one line of a `.scrawl`, so a stroke can be pasted in
-// from the app exactly as it was recorded.
+// One line of a `.scrawl`, so a stroke pastes in from the app as recorded.
 export function stroke(line: string): Point3[] {
   const out: Point3[] = [];
   let x = 0;

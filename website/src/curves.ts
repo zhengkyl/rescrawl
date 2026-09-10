@@ -235,18 +235,17 @@ export type FreehandPressure = "simulate" | "radius";
 // are persisted to localStorage, and one saved before an engine was removed
 // still names it. An unknown engine would index `ENGINES` to undefined and
 // throw on the first render, so it falls back to the default instead.
-const OUTLINE_MODES: OutlineMode[] = ["fit", "sampled", "greedy", "freehand"];
+const OUTLINE_MODES: OutlineMode[] = ["greedy", "freehand"];
 
 export function withKnownEngine(o: InkOptions): InkOptions {
   return OUTLINE_MODES.includes(o.engine) ? o : { ...o, engine: INK_DEFAULTS.engine };
 }
 
-// Every length in stage 4 -- `fitWindow`, `fitHorizon`, `outlineTol`,
-// `sampleStep` -- changed from a pixel count to a multiple of the pen at once.
-// A blob saved under the old meaning would be wrong by a factor of `maxWidth`
-// on four knobs, and there is no way to tell an old value from a new one for
-// several of them, so the key is versioned and stale panel settings are simply
-// dropped. Strokes are stored separately and are unaffected.
+// Every length in stage 4 changed from a pixel count to a multiple of the pen
+// at once, and the engine list has since shrunk to one. A blob saved under
+// either older meaning would be wrong, and for several knobs an old value is
+// indistinguishable from a new one, so the key is versioned and stale panel
+// settings are dropped. Strokes are stored separately and are unaffected.
 export const INK_STORAGE_KEY = "rescrawl-ink-2";
 
 // perfect-freehand's knobs, prefixed so they can share one options object with
@@ -277,7 +276,7 @@ export const INK_DEFAULTS: InkOptions = {
 // What rescrawl gets, with the website-only mode folded back to an engine the
 // library knows. Freehand runs no engine, so which one is named is moot.
 function toRenderOptions(o: InkOptions): Required<RenderOptions> {
-  return { ...o, engine: o.engine === "freehand" ? "fit" : o.engine };
+  return { ...o, engine: o.engine === "freehand" ? "greedy" : o.engine };
 }
 
 // perfect-freehand's radius is size · (0.5 − thinning · (0.5 − pressure)), so
@@ -327,7 +326,7 @@ const asNode = (p: Point4): FitNode => ({
 // being compared. So `nodes` here is just `distinct` — the overlay's nodes layer
 // shows no drop in this mode.
 function renderFreehand(pts: Stroke, o: InkOptions): Freehand {
-  const pre = centerlineStages(pts, { ...o, engine: "fit" });
+  const pre = centerlineStages(pts, { ...o, engine: "greedy" });
   const stages: StrokeStages = { ...pre, nodes: pre.distinct.map(asNode) };
   const simulate = o.fhPressure === "simulate";
   const input = simulate
@@ -420,12 +419,9 @@ export type InkSection = { label: string; items: InkItem[] };
 // Which engine a knob belongs to. Written out rather than derived: each
 // engine's own file lists what it reads, and this is the panel saying the
 // same thing in the panel's terms.
-const ifSampled = (o: InkOptions) => o.engine === "sampled";
-const ifGreedy = (o: InkOptions) => o.engine === "greedy";
 const ifFreehand = (o: InkOptions) => o.engine === "freehand";
-// Every rescrawl engine runs `fitCurve` for its nodes, so they share its knobs;
-// freehand is the only mode that does not.
-const ifFitCurve = (o: InkOptions) => !ifFreehand(o);
+// Freehand brings its own everything; every rescrawl knob is for the other one.
+const ifEngine = (o: InkOptions) => !ifFreehand(o);
 
 export const INK_SECTIONS: InkSection[] = [
   {
@@ -472,8 +468,6 @@ export const INK_SECTIONS: InkSection[] = [
         key: "engine",
         label: "engine",
         choices: [
-          { value: "fit", label: "fit — settled lines and cubics" },
-          { value: "sampled", label: "sampled — walk the envelope" },
           { value: "greedy", label: "greedy — contacts where the error demands" },
           { value: "freehand", label: "perfect-freehand" },
         ],
@@ -488,7 +482,7 @@ export const INK_SECTIONS: InkSection[] = [
         min: 0,
         max: 1,
         step: 0.01,
-        when: ifFitCurve,
+        when: ifEngine,
       },
       // A turn sharper than the angle, measured over `fitWindow` either side,
       // is a corner; that window is also what the tangent and the radius slope
@@ -500,7 +494,7 @@ export const INK_SECTIONS: InkSection[] = [
         min: 10,
         max: 180,
         step: 1,
-        when: ifFitCurve,
+        when: ifEngine,
       },
       {
         kind: "range",
@@ -509,7 +503,7 @@ export const INK_SECTIONS: InkSection[] = [
         min: 0.1,
         max: 5,
         step: 0.05,
-        when: ifFitCurve,
+        when: ifEngine,
       },
       // How far one segment may run before it commits anyway. The open
       // segment is the only committed-looking ink that still moves, so this
@@ -521,21 +515,8 @@ export const INK_SECTIONS: InkSection[] = [
         min: 0.5,
         max: 50,
         step: 0.25,
-        when: ifFitCurve,
+        when: ifEngine,
       },
-      // --- sampled ---
-      // px along the centerline between outline contacts. Smaller is closer
-      // to the true envelope and a bigger path; this is its only knob.
-      {
-        kind: "range",
-        key: "sampleStep",
-        label: "sample step (× pen)",
-        min: 0.05,
-        max: 4,
-        step: 0.05,
-        when: ifSampled,
-      },
-      // --- greedy ---
       // How far the drawn outline may stray from the true envelope: contacts
       // go wherever a hop would otherwise exceed it.
       {
@@ -545,7 +526,7 @@ export const INK_SECTIONS: InkSection[] = [
         min: 0.005,
         max: 0.25,
         step: 0.005,
-        when: ifGreedy,
+        when: ifEngine,
       },
       // How far one hop may span, whatever the tolerance would have allowed.
       // The outline's answer to `fitHorizon`: a long hop reaching into the
@@ -558,14 +539,7 @@ export const INK_SECTIONS: InkSection[] = [
         min: 0.5,
         max: 20,
         step: 0.25,
-        when: ifGreedy,
-      },
-      // Read by fit and sampled; greedy has no corner construction to point at.
-      {
-        kind: "toggle",
-        key: "cornerPoint",
-        label: "inner corner point",
-        when: (o) => !ifGreedy(o) && !ifFreehand(o),
+        when: ifEngine,
       },
       // --- perfect-freehand ---
       // Its `size` is `maxWidth` above. With pressure from the radius stage,

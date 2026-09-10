@@ -7,13 +7,11 @@ export type Point4 = { x: number; y: number; t: number; r: number };
 // to its chord rule for that side.
 export type Contact = Point2 & { tx: number; ty: number; m?: number; mIn?: number; mOut?: number };
 
-// A centerline node from `fitCurve`. The segment between two nodes is a
-// Hermite cubic from the first node's out-tangent (`ox`, `oy`, magnitude `mo`)
-// to the second's in-tangent (`ix`, `iy`, magnitude `mi`). A magnitude of 0 on
-// both ends is read as a straight chord by the consumers; `fitCurve` itself
-// only emits cubics, since a straight run is a cubic whose tangents lie along
-// the chord. In- and out-tangents differ only at a corner. The radius runs as
-// a Hermite too, with `slope` (dr/ds) as its derivative at the node.
+// The segment between two nodes is a Hermite cubic from the first's out-tangent
+// (`ox`, `oy`, magnitude `mo`) to the second's in-tangent (`ix`, `iy`, `mi`).
+// Zero magnitudes at both ends read as a straight chord. In- and out-tangents
+// differ only at a corner. The radius runs as a Hermite too, with `slope`
+// (dr/ds) as its derivative.
 export type FitNode = Point4 & {
   ix: number;
   iy: number;
@@ -25,24 +23,11 @@ export type FitNode = Point4 & {
   corner: boolean; // detected as a corner, so nothing was fitted across it
 };
 
-// Which engine turns the distinct centerline into the stroke's shape. An
-// engine owns all of stage 4: which samples survive as nodes, what a node
-// records about the path between them, and the outline wrapped around them
-// -- see `engine.ts` for the contract.
-//
-//   fit       fitCurve, then one cubic per side per segment, its magnitudes
-//             solved by least squares against the pen envelope.
-//   sampled   the SAME fitCurve, then the envelope walked at a fixed step
-//             with a contact dropped at each one. No outline fitting at all,
-//             so it is the reference the other two are trying to match.
-//   greedy    the SAME fitCurve, then the envelope fitted the way the
-//             centerline was: a contact wherever the drawn cubic would
-//             otherwise stray more than `outlineTol` px from the envelope.
-export type OutlineEngine = "fit" | "sampled" | "greedy";
+// One today; `engine.ts` says how to add a variant.
+export type OutlineEngine = "greedy";
 
-// Flat on purpose: every knob is one key, so a panel can bind a slider to it
-// and a JSON blob can hold a preset. Which engine reads which key is declared
-// by that engine's `knobs`; the rest is read by every run.
+// Flat on purpose: one key per knob, so a panel binds a slider to it and a JSON
+// blob holds a preset.
 export type RenderOptions = {
   engine?: OutlineEngine;
 
@@ -66,13 +51,11 @@ export type RenderOptions = {
   // a drawing scaled up with a pen scaled to match fits identically. `maxWidth`
   // is the one length the whole pipeline is measured against.
   outlineTol?: number; // × maxWidth the drawn outline may stray from the envelope (greedy)
-  outlineHorizon?: number; // × maxWidth one outline hop may span (greedy)
-  sampleStep?: number; // × maxWidth along the centerline between contacts (sampled)
-  cornerPoint?: boolean; // inside of a bend: one contact where the tangent lines cross (fit, sampled)
+  outlineHorizon?: number; // × maxWidth one outline hop may span
 };
 
 export const RENDER_DEFAULTS: Required<RenderOptions> = {
-  engine: "fit",
+  engine: "greedy",
   minWidth: 1.5,
   maxWidth: 8,
   thinSpeed: 1,
@@ -84,8 +67,6 @@ export const RENDER_DEFAULTS: Required<RenderOptions> = {
   fitHorizon: 3,
   outlineTol: 0.03125,
   outlineHorizon: 3,
-  sampleStep: 0.75,
-  cornerPoint: false,
 };
 
 // The centerline as each stage left it, oldest first. See `pipeline.ts` --

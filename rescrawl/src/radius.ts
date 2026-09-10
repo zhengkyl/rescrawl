@@ -36,7 +36,8 @@ export function toRadiiPointsFromRawSamples(
 
   let dtAccum = 0;
 
-  let prev: Point3 | null = null;
+  // Parked with the backflow experiment below, which is its only reader.
+  // let prev: Point3 | null = null;
   for (let i = 0; i < points.length - 1; i++) {
     const curr = points[i];
     const next = points[i + 1];
@@ -93,7 +94,7 @@ export function toRadiiPointsFromRawSamples(
     // if dt === 0, use previous smoothR
 
     radii.push({ ...curr, r: smoothR });
-    prev = curr;
+    // prev = curr;
   }
 
   return radii;

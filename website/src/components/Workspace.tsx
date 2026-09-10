@@ -15,7 +15,6 @@ import { applyStrokeOp, useStrokes } from "../strokeStore";
 import type { Config } from "../utils";
 import { DEFAULT_CONFIG } from "../utils";
 import { App } from "./App";
-import { BenchDialog } from "./BenchDialog";
 import { CanvasPanel, Controls } from "./Controls";
 import { CurvePanel } from "./CurvePanel";
 import { ExportDialog } from "./ExportDialog";
@@ -44,7 +43,6 @@ export function Workspace() {
   }));
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [benchOpen, setBenchOpen] = useState(false);
 
   // Persist config + ink options; reflect sidebar side on <body>.
   useEffect(() => {
@@ -115,8 +113,6 @@ export function Workspace() {
         setExportOpen,
         settingsOpen,
         setSettingsOpen,
-        benchOpen,
-        setBenchOpen,
       }}
     >
       <div id="main-area">
@@ -140,7 +136,6 @@ export function Workspace() {
         </div>
       </div>
       {exportOpen && <ExportDialog />}
-      {benchOpen && <BenchDialog />}
       <SettingsDialog />
     </AppContext.Provider>
   );

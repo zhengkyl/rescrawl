@@ -4,62 +4,31 @@ import { basis, fitCurve } from "./fit.ts";
 import { chordRule, clamp11, dist, wrapPi } from "./math.ts";
 import type { Contact, FitNode, Point4, RenderOptions } from "./types.ts";
 
-// --- the greedy engine: fit the centerline, then fit the outline the same way ---
+// Nodes from `fitCurve`, then the outline sampled densely once round and
+// walked greedily: a contact only where the cubic that would otherwise be drawn
+// strays more than `outlineTol` from those samples.
 //
-// The nodes come from `fitCurve`, as in `fit` and `sampled`. The outline has no
-// constructions in it at all -- no cap case, no corner case, no arc-per-
-// quarter-turn rule, no inner corner point. There are only two steps:
+// There are no cap, corner or arc constructions because the outline is ONE
+// CURVE -- sides are the pen envelope, caps and the outside of a corner are its
+// rim, and they meet tangentially. The one exception is the INSIDE of a corner,
+// where the two pieces cross instead of meeting; a hop must not span that, so
+// it gets a cut and nonzero winding fills the fold.
 //
-//   1. Sample the whole closed outline densely, once round, as one sequence.
-//   2. Walk it greedily and keep a contact only where the cubic that would
-//      otherwise be drawn strays more than `outlineTol` px from those samples.
-//
-// The reason the constructions can go is that the outline is ONE CURVE. The
-// sides are the pen envelope, the caps and the outside of a corner are the
-// pen's own rim, and they meet tangentially: the envelope at a segment end is
-// the same point, with the same tangent, as the rim at that angle. So a cap
-// is not a special object needing three contacts, it is just a stretch of
-// curve that happens to be circular, and it costs whatever the tolerance says
-// it costs -- one hop on a hairline pen, several on a fat one.
-//
-// The single exception is the INSIDE of a corner. There the two pieces of
-// envelope cross instead of meeting, so the curve really is discontinuous and
-// a hop must not span it. Those get a `break`, which forces a contact on both
-// lips of the fold and reproduces the crossing exactly. Nonzero winding fills
-// it. That is the only place this file knows what a corner is.
-//
-// Compared to the other two envelope engines:
-//
-//   sampled   contacts every `sampleStep` px regardless of need. Simple, but
-//             it spends most of its contacts on straights.
-//   fit       one cubic per side per centerline segment, magnitudes solved by
-//             least squares. Cheap on contacts, but its hops are pinned to the
-//             centerline's nodes, which is the wrong place when the outline's
-//             turn concentrates somewhere else (a corner, a taper).
-//   greedy    contacts where the error demands, chord-rule magnitudes. The two
-//             sides are walked independently, so the inside of a bend gets
-//             more contacts than the outside, which is where the outline
-//             actually turns faster.
-//
-// The envelope math is its own copy, as in `sampled.ts`, so the engines can be
-// edited and compared without moving each other.
+// A variant should copy this file's envelope math rather than share it, so the
+// two can be compared without moving each other. See `engine.ts`.
 
-// A turn smaller than this is not a corner: the node's two tangents agree to
-// within noise, so the outline runs straight through it.
+// Below this the node's tangents agree to within noise: not a corner.
 const SMOOTH_TURN = 0.02;
-// × maxWidth between the samples the tube test sees. The test can only judge
-// what is sampled, so this bounds how short a feature can be and still cost a
-// contact. Relative to the pen, not a pixel count: an absolute step put twice
-// as many samples on the same curve when the drawing was scaled up, which moved
-// every index the greedy walk probes and was what stopped this engine -- alone
-// of the three -- reproducing its own shape at a different scale.
+// × maxWidth between the samples the tube test sees, so it bounds how short a
+// feature can be and still cost a contact. Pen-relative, not pixels: an
+// absolute step put twice as many samples on the same curve when the drawing
+// was scaled up, moving every index the walk probes -- which is what stopped
+// this engine reproducing its own shape at another scale.
 const FINE_STEP = 0.0625;
 const MIN_FINE = 8; // samples per centerline segment at the very least
 // Samples one hop may span, so a pathological run cannot cost quadratic time.
 const MAX_HOP = 512;
-// × maxWidth: two samples closer than this are the same point. The junction
-// between a rim and a segment end is shared, and a zero-length hop has no
-// tangent to speak of.
+// × maxWidth: closer than this and two samples are the same point.
 const SAME = 1e-10;
 
 export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Contact[] {
@@ -71,8 +40,7 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   const angIn = (i: number) => Math.atan2(ns[i].iy, ns[i].ix);
   const angOut = (i: number) => Math.atan2(ns[i].oy, ns[i].ox);
 
-  // The fitted centerline of segment k at u: position, unit tangent, radius,
-  // and dr/ds there.
+  // The fitted centerline of segment k at u.
   const at = (k: number, u: number) => {
     const a = ns[k];
     const b = ns[k + 1];
@@ -103,11 +71,9 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
     return { x, y, dx, dy, r, rs: clamp11(speed > 0 ? ru / speed : 0) };
   };
 
-  // The envelope contact of segment k on side s at u, its tangent pointing the
-  // way that side is walked: -1 with the stroke, +1 against it. At u = 0 and
-  // u = 1 this lands exactly on the rim at angle angOut/angIn -+ off, with the
-  // tangent `contactAt` gives there, which is what lets the rim stretches and
-  // the sides be one curve.
+  // Envelope contact of segment k on side s at u; s is -1 with the stroke, +1
+  // against. At u = 0 and 1 it lands exactly on the rim, which is what lets the
+  // rim stretches and the sides be one curve.
   const envelope = (k: number, s: 1 | -1, u: number): Contact => {
     const c = at(k, u);
     const w = s * Math.sqrt(1 - c.rs * c.rs);
@@ -144,9 +110,8 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
     const m = Math.max(2, Math.ceil((p.r * span) / fine));
     for (let j = 0; j <= m; j++) add(contactAt(p, from + (span * j) / m));
   };
-  // A node between two segments, on the side being walked. Outside the bend
-  // the rim carries the turn; inside it, the two pieces cross and the curve
-  // is cut. `from` is the angle arrived at, `to` the angle left on.
+  // Outside the bend the rim carries the turn; inside, the two pieces cross and
+  // the curve is cut.
   const node = (i: number, from: number, to: number) => {
     const g = wrapPi(to - from);
     if (Math.abs(g) < SMOOTH_TURN) return; // one curve straight through
@@ -158,15 +123,13 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   };
   const side = (k: number, s: 1 | -1) => {
     const m = Math.max(MIN_FINE, Math.ceil(dist(ns[k], ns[k + 1]) / fine));
-    // Forced when a cut has just been marked, so the fold's far lip survives
-    // the coincidence check and stays the sample the cut points at.
+    // Forced after a cut so the fold's far lip survives the coincidence check.
     const force = cut.has(loop.length);
     for (let j = 0; j <= m; j++)
       add(envelope(k, s, s === -1 ? j / m : 1 - j / m), force && j === 0);
   };
 
-  // Start cap, then the forward side, then the end cap, then back. Each cap
-  // is just a rim stretch; nothing here treats it as an object.
+  // Start cap, forward side, end cap, back. A cap is just a rim stretch.
   rim(ns[0], angOut(0) + off(0), angOut(0) - off(0));
   for (let k = 0; k < n - 1; k++) {
     side(k, -1);
@@ -179,8 +142,7 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
     side(k, 1);
     if (k > 0) node(k, angOut(k) + off(k), angIn(k) + off(k));
   }
-  // The last sample is segment 0's u = 0 on the back side, which is the same
-  // point the start cap opened on, so drop it and let the loop close.
+  // The last sample is where the start cap opened; drop it and let it close.
   const first = loop[0];
   while (loop.length > 1) {
     const last = loop[loop.length - 1];
@@ -192,29 +154,19 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
 
   // --- 2. keep only the contacts the tolerance demands ---
 
-  // `seq` repeats the first sample at the end so the closing hop is an
-  // ordinary run rather than a special case.
+  // `seq` repeats the first sample so the closing hop is an ordinary one.
   const seq = [...loop, loop[0]];
   const S = new Float64Array(N + 1);
   for (let i = 1; i <= N; i++) S[i] = S[i - 1] + dist(seq[i - 1], seq[i]);
 
-  // Does the chord-rule cubic from sample a to sample b pass within `tol` of
-  // every sample between? Each sample starts at its length fraction along the
-  // hop and takes two Newton steps toward the nearest point of the cubic, the
-  // same test `fitCurve` runs on the centerline.
+  // Does the chord-rule cubic a..b pass within `tol` of every sample between?
+  // Two Newton steps per sample, as `fitCurve` does on the centerline.
   const tol2 = o.outlineTol * o.outlineTol * o.maxWidth * o.maxWidth;
 
-  // The outline's `fitHorizon`: a hop may not span more than this, however well
-  // a cubic would have covered it.
-  //
-  // Without it a hop is bounded only by the tolerance, and on a smooth fast
-  // stroke that let one cubic swallow 32px of outline where `sampled` was
-  // placing a contact every 4.6px. That matters because a hop reaching into the
-  // still-unsettled zone near the pen re-decides its endpoint every frame, and
-  // re-anchors every hop after it -- so the last contact you could trust sat a
-  // whole hop further back than the unsettled nodes themselves, and churn
-  // reached ~40px behind the pen against `fit`'s 7px. Capping the span trades a
-  // few more contacts for a much shorter reach.
+  // The outline's `fitHorizon`. Uncapped, one cubic swallowed 32px of outline
+  // where a fixed-step engine placed a contact every 4.6px -- and a long hop
+  // reaching into the unsettled ink at the pen re-decides every frame and
+  // re-anchors every hop behind it, dragging churn ~40px back.
   const hopMax = o.outlineHorizon * o.maxWidth;
   const covers = (a: number, b: number): boolean => {
     const A = seq[a];
@@ -250,25 +202,14 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
     return true;
   };
 
-  // Sample 0 sits on node 0's disc, which never moves once the stroke has
-  // started, so it is the one place on the loop that can be pinned. BOTH walks
-  // start there and run outward, meeting in the end cap.
-  //
-  // The point is that a hop should be decided by data behind it. Walking once
-  // round the loop instead would cross the end cap, which sits at the pen, so
-  // the whole back side would re-anchor every frame. Walking outward from the
-  // pinned start means only the two hops that meet at the cap are redrawn.
-  //
-  // Measured, this is NOT what limits how soon laid ink stops moving: the
-  // outline is only as settled as the nodes under it, and `fitCurve` keeps
-  // revising node magnitudes until the open segment commits, which is roughly
-  // `fitHorizon` px behind the pen. Contacts here are exact-stable well before
-  // that. Placement is anchored this way because it is the right shape for the
-  // problem, not because it bought stability on its own.
+  // Sample 0 is on node 0's disc, the one place on the loop that never moves,
+  // so both walks start there and run outward to meet in the end cap. Walking
+  // once round instead would cross the cap at the pen and re-anchor the whole
+  // back side every frame. (Measured, this is not what limits settling --
+  // `fitCurve` revising the open segment is.)
   const meet = Math.max(capLo, Math.min(capHi, (capLo + capHi) >> 1));
   const cuts = [...cut].filter((i) => i > 0 && i < N).sort((a, b) => a - b);
-  // [lo, hi] chopped at the folds inside it, ascending. A hop may not reach
-  // across a fold, so each piece is walked on its own.
+  // [lo, hi] chopped at the folds inside it: a hop may not reach across one.
   const pieces = (lo: number, hi: number): [number, number][] => {
     const out: [number, number][] = [];
     let s = lo;
@@ -282,13 +223,10 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   };
 
   const keep = new Set<number>([0]);
-  // Extend from `from` towards `to` -- either direction -- keeping a contact
-  // wherever the hop can go no further. The hop grows by doubling and is then
-  // bisected back to the last end that passed: stepping one sample at a time
-  // would retest the whole hop on every step, and the outline is sampled far
-  // too finely for that. The test is not monotone in hop length, so this can
-  // settle on a longer passing hop than a step-by-step walk would; either way
-  // every hop committed passed the test.
+  // Keep a contact wherever the hop can go no further. It grows by doubling
+  // then bisects back to the last end that passed -- stepping one sample at a
+  // time would retest the whole hop each step. The test is not monotone in hop
+  // length, so this can settle on a longer passing hop than a walk would.
   const walk = (from: number, to: number) => {
     const dir = to > from ? 1 : -1;
     const reach = (a: number, k: number) => {
@@ -333,9 +271,8 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
     keep.add(hi);
     walk(lo, hi);
   }
-  // Out from the pin along the back side, into the cap from the other end.
-  // `seq[N]` is `seq[0]`, so the high end of each piece is the one nearer the
-  // start of the stroke, and that is the end to anchor on.
+  // Back side. `seq[N]` is `seq[0]`, so each piece's high end is the one nearer
+  // the stroke start, and that is the end to anchor on.
   for (const [lo, hi] of pieces(meet, N)) {
     keep.add(lo);
     keep.add(hi === N ? 0 : hi);
@@ -345,8 +282,6 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   // Contacts come out in loop order whichever way they were decided.
   return [...keep].sort((a, b) => a - b).map((i) => seq[i]);
 }
-
-// --- the engine ---
 
 // Reads: fitTol, fitCornerAngle, fitWindow, fitHorizon, outlineTol, outlineHorizon.
 export function greedyEngine(distinct: Point4[], o: Required<RenderOptions>): Shape {
