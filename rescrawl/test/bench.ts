@@ -1,5 +1,5 @@
 import { renderStroke } from "../src/pipeline.ts";
-import type { Point3 } from "../src/types.ts";
+import type { Point3 } from "../src/math.ts";
 import { discCoverage } from "./geometry.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 
@@ -39,7 +39,7 @@ function measure(name: string, group: Point3[][]) {
     const r = renderStroke(pts);
     nodes += r.stages.nodes.length;
     contacts += r.outline.length;
-    const c = discCoverage({ nodes: r.stages.nodes, outline: r.outline });
+    const c = discCoverage({ centerline: r.stages.nodes, outline: r.outline });
     if (c.worst < worst) {
       worst = c.worst;
       at = group.length > 1 ? `${s}:${c.node}` : `#${c.node}`;

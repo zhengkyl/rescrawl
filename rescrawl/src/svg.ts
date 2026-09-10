@@ -1,5 +1,7 @@
 import { chordRule, dist } from "./math.ts";
-import type { Contact, FitNode, Point2 } from "./types.ts";
+import type { CenterlineNode } from "./centerline/fit.ts";
+import type { Point2 } from "./math.ts";
+import type { OutlineNode } from "./outline/contact.ts";
 
 // One builder for all path data, applying the standard size wins: relative
 // commands, implied repeats, trimmed numbers, dropped separators. All are
@@ -122,7 +124,7 @@ export function centerlinePath(pts: Point2[], digits = DEFAULT_DIGITS): string {
 }
 
 // The chord rule between two contacts -- see `chordRule`.
-export function hermiteMag(a: Contact, b: Contact): number {
+export function hermiteMag(a: OutlineNode, b: OutlineNode): number {
   return chordRule(dist(a, b), a.tx, a.ty, b.tx, b.ty);
 }
 
@@ -130,7 +132,7 @@ export function hermiteMag(a: Contact, b: Contact): number {
 // cubic on the stored tangents where it said cubic. Unlike `centerlinePath`,
 // this one is faithful. The engines do not return it -- a consumer that wants
 // the centerline as path data (the debug views, and nothing else) calls this.
-export function fitPath(ns: FitNode[], digits = DEFAULT_DIGITS): string {
+export function fitPath(ns: CenterlineNode[], digits = DEFAULT_DIGITS): string {
   if (ns.length === 0) return "";
   const pen = new Pen(digits);
   pen.moveTo(ns[0].x, ns[0].y);
@@ -152,7 +154,7 @@ export function fitPath(ns: FitNode[], digits = DEFAULT_DIGITS): string {
 // scaled by the contact's own magnitude for that side if it has one (`mOut`
 // leaving, `mIn` arriving, `m` for either), else by the chord rule. Bezier
 // control points sit at a third of the Hermite tangent.
-export function outlinePath(cs: Contact[], digits = DEFAULT_DIGITS): string {
+export function outlinePath(cs: OutlineNode[], digits = DEFAULT_DIGITS): string {
   const n = cs.length;
   if (n < 2) return "";
   const pen = new Pen(digits);

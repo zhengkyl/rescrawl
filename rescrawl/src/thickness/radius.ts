@@ -1,5 +1,13 @@
-import { dist, lerp } from "./math.ts";
-import type { Point3, Point4, RenderOptions } from "./types.ts";
+import { dist, lerp } from "../math.ts";
+import type { Point3, Point4 } from "../math.ts";
+
+// Stage 1: radius from pen speed.
+export type RadiusOptions = {
+  minWidth?: number; // width when moving at or above `thinSpeed`
+  maxWidth?: number; // width at a standstill
+  thinSpeed?: number; // px/ms at which the stroke reaches minWidth
+  widthLag?: number; // ms for the width to catch up at a standstill
+};
 
 function nextEma(current: number, target: number, delta: number, tauConst: number) {
   const stepWeight = delta / tauConst;
@@ -9,7 +17,7 @@ function nextEma(current: number, target: number, delta: number, tauConst: numbe
 
 export function toRadiiPointsFromRawSamples(
   points: Point3[],
-  o: Required<RenderOptions>,
+  o: Required<RadiusOptions>,
 ): Point4[] {
   if (points.length === 0) return [];
 

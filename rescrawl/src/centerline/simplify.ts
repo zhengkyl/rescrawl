@@ -1,4 +1,4 @@
-import type { Point4 } from "./types.ts";
+import type { Point4 } from "../math.ts";
 
 export function dropContained(pts: Point4[]) {
   const out: Point4[] = [];

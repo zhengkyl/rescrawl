@@ -1,22 +1,29 @@
 // wide raw input -> narrow -> narrow -> narrow -> widen -> widen -> widen -> widen
 
-export { chordRule, clamp11, dist, lerp, TAU, wrapPi } from "./math.ts";
-export { ENGINES, type Engine, type Shape } from "./engine.ts";
-export { fitCurve } from "./fit.ts";
-export { greedyEngine, toOutlineGreedy } from "./greedy.ts";
-export { centerlineStages, renderStroke } from "./pipeline.ts";
-export { toRadiiPointsFromRawSamples } from "./radius.ts";
-export { dropContained } from "./simplify.ts";
-export { RENDER_DEFAULTS } from "./types.ts";
-export type {
-  CenterlineStages,
-  Contact,
-  FitNode,
-  OutlineEngine,
-  Point2,
-  Point3,
-  Point4,
-  RenderOptions,
-  StrokeRender,
-  StrokeStages,
-} from "./types.ts";
+export { type CenterlineNode, fitCurve, type FitOptions } from "./centerline/fit.ts";
+export { dropContained } from "./centerline/simplify.ts";
+export type { SmoothOptions } from "./centerline/smooth.ts";
+export { ENGINES, type Engine, type OutlineEngine, type Shape } from "./engine.ts";
+export {
+  chordRule,
+  clamp11,
+  dist,
+  lerp,
+  type Point2,
+  type Point3,
+  type Point4,
+  TAU,
+  wrapPi,
+} from "./math.ts";
+export type { OutlineNode } from "./outline/contact.ts";
+export { greedyEngine, type GreedyOptions, toOutlineGreedy } from "./outline/greedy.ts";
+export {
+  type CenterlineStages,
+  centerlineStages,
+  RENDER_DEFAULTS,
+  type RenderOptions,
+  renderStroke,
+  type StrokeRender,
+  type StrokeStages,
+} from "./pipeline.ts";
+export { type RadiusOptions, toRadiiPointsFromRawSamples } from "./thickness/radius.ts";

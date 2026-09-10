@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { renderStroke } from "../src/pipeline.ts";
-import type { Point3 } from "../src/types.ts";
+import type { Point3 } from "../src/math.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 
 // Every length in stage 4 is a multiple of `maxWidth`. Scale the drawing and

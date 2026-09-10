@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { Point3 } from "../src/types.ts";
+import type { Point3 } from "../src/math.ts";
 import { stroke } from "./geometry.ts";
 
 function trace(f: (u: number) => [number, number], ms: number): Point3[] {

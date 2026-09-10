@@ -1,8 +1,7 @@
-import { contactAt, discLoop, wrapZeroTau } from "./contact.ts";
-import type { Shape } from "./engine.ts";
-import { basis, fitCurve } from "./fit.ts";
-import { chordRule, clamp11, dist, wrapPi } from "./math.ts";
-import type { Contact, FitNode, Point4, RenderOptions } from "./types.ts";
+import { basis, type CenterlineNode, fitCurve, type FitOptions } from "../centerline/fit.ts";
+import type { Shape } from "../engine.ts";
+import { chordRule, clamp11, dist, type Point4, wrapPi } from "../math.ts";
+import { contactAt, discLoop, type OutlineNode, wrapZeroTau } from "./contact.ts";
 
 // Nodes from `fitCurve`, then the outline sampled densely once round and
 // walked greedily: a contact only where the cubic that would otherwise be drawn
@@ -16,6 +15,12 @@ import type { Contact, FitNode, Point4, RenderOptions } from "./types.ts";
 //
 // A variant should copy this file's envelope math rather than share it, so the
 // two can be compared without moving each other. See `engine.ts`.
+
+export type GreedyOptions = {
+  maxWidth?: number; // width at a standstill; the unit the lengths below are measured in
+  outlineTol?: number; // × maxWidth the drawn outline may stray from the envelope
+  outlineHorizon?: number; // × maxWidth one outline hop may span
+};
 
 // Below this the node's tangents agree to within noise: not a corner.
 const SMOOTH_TURN = 0.02;
@@ -31,7 +36,7 @@ const MAX_HOP = 512;
 // × maxWidth: closer than this and two samples are the same point.
 const SAME = 1e-10;
 
-export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Contact[] {
+export function toOutlineGreedy(ns: CenterlineNode[], o: Required<GreedyOptions>): OutlineNode[] {
   const n = ns.length;
   if (n === 0) return [];
   if (n === 1) return discLoop(ns[0]);
@@ -74,7 +79,7 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   // Envelope contact of segment k on side s at u; s is -1 with the stroke, +1
   // against. At u = 0 and 1 it lands exactly on the rim, which is what lets the
   // rim stretches and the sides be one curve.
-  const envelope = (k: number, s: 1 | -1, u: number): Contact => {
+  const envelope = (k: number, s: 1 | -1, u: number): OutlineNode => {
     const c = at(k, u);
     const w = s * Math.sqrt(1 - c.rs * c.rs);
     // radial unit vector from the centre to the contact
@@ -96,10 +101,10 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   const fine = FINE_STEP * o.maxWidth;
   const same = SAME * o.maxWidth;
 
-  const loop: Contact[] = [];
+  const loop: OutlineNode[] = [];
   // `cut[i]` marks a break in the curve immediately before sample i.
   const cut = new Set<number>();
-  const add = (c: Contact, force = false) => {
+  const add = (c: OutlineNode, force = false) => {
     const last = loop[loop.length - 1];
     if (!force && last && Math.abs(c.x - last.x) < same && Math.abs(c.y - last.y) < same) return;
     loop.push(c);
@@ -283,8 +288,7 @@ export function toOutlineGreedy(ns: FitNode[], o: Required<RenderOptions>): Cont
   return [...keep].sort((a, b) => a - b).map((i) => seq[i]);
 }
 
-// Reads: fitTol, fitCornerAngle, fitWindow, fitHorizon, outlineTol, outlineHorizon.
-export function greedyEngine(distinct: Point4[], o: Required<RenderOptions>): Shape {
+export function greedyEngine(distinct: Point4[], o: Required<FitOptions & GreedyOptions>): Shape {
   const nodes = fitCurve(distinct, o);
-  return { nodes, outline: toOutlineGreedy(nodes, o) };
+  return { centerline: nodes, outline: toOutlineGreedy(nodes, o) };
 }

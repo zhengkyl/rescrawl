@@ -1,4 +1,8 @@
-import type { Point4, RenderOptions } from "./types.ts";
+import type { Point4 } from "../math.ts";
+
+export type SmoothOptions = {
+  smoothWindow?: number; // points averaged per centerpoint, odd; 0 or 1 is no smoothing
+};
 
 // Stage 2: moving average over x/y only -- stage 1 already smoothed the radius.
 //
@@ -6,7 +10,7 @@ import type { Point4, RenderOptions } from "./types.ts";
 // every input point produces an output and the endpoints pass through
 // untouched; a fixed window would drop points at each end and detach the stroke
 // from where the pen actually started. 0 or 1 is off, and off is the default.
-export function smoothPositions(points: Point4[], o: Required<RenderOptions>): Point4[] {
+export function smoothPositions(points: Point4[], o: Required<SmoothOptions>): Point4[] {
   const n = points.length;
   // Off by default, and off is the hot path: hand the same points straight
   // back rather than copying every one of them to itself each frame.

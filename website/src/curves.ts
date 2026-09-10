@@ -1,8 +1,8 @@
 import { getStroke } from "perfect-freehand";
 import type {
-  Contact,
-  FitNode,
+  CenterlineNode,
   OutlineEngine,
+  OutlineNode,
   Point4,
   RenderOptions,
   StrokeStages,
@@ -308,7 +308,7 @@ type Freehand = { stages: StrokeStages; polygon: number[][] };
 // Zero magnitudes are what `fitPath` reads as a straight chord, so the debug
 // centerline comes out as the polyline through the samples — which is exactly
 // what this mode's centerline is.
-const asNode = (p: Point4): FitNode => ({
+const asNode = (p: Point4): CenterlineNode => ({
   ...p,
   ix: 1,
   iy: 0,
@@ -363,7 +363,7 @@ export function inkStages(
   stroke: Stroke,
   options: InkOptions,
   t: number,
-): { curve: string; outline: Contact[]; stages: StrokeStages } {
+): { curve: string; outline: OutlineNode[]; stages: StrokeStages } {
   const pts = elapsedPoints(stroke, t);
   if (options.engine === "freehand") {
     const { stages, polygon } = renderFreehand(pts, options);

@@ -1,11 +1,11 @@
 import type { Shape } from "../src/engine.ts";
-import { chordRule, dist } from "../src/math.ts";
-import type { Contact, Point3 } from "../src/types.ts";
+import { chordRule, dist, type Point3 } from "../src/math.ts";
+import type { OutlineNode } from "../src/outline/contact.ts";
 
 // The outline as `outlinePath` emits it, flattened to a dense polygon. Testing
 // against the contacts alone reports failures that are not real: chords cut
 // across the curve wherever contacts are sparse.
-export function outlinePolygon(cs: Contact[], step = 0.25): { x: number; y: number }[] {
+export function outlinePolygon(cs: OutlineNode[], step = 0.25): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
   for (let i = 0; i < cs.length; i++) {
     const a = cs[i];
@@ -50,7 +50,7 @@ export function discCoverage(shape: Shape, rim = 32): { worst: number; node: num
   const poly = outlinePolygon(shape.outline);
   let worst = 1;
   let node = -1;
-  shape.nodes.forEach((nd, i) => {
+  shape.centerline.forEach((nd, i) => {
     let hit = 0;
     for (let k = 0; k < rim; k++) {
       const a = (2 * Math.PI * k) / rim;

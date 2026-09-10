@@ -1,5 +1,5 @@
-import { TAU } from "./math.ts";
-import type { Contact, Point4 } from "./types.ts";
+import { TAU } from "../math.ts";
+import type { Point2, Point4 } from "../math.ts";
 
 // --- what every outline is made of ---
 //
@@ -7,7 +7,19 @@ import type { Contact, Point4 } from "./types.ts";
 // increase clockwise. A contact is a point on a disc's rim with the outline's
 // forward tangent there, which is perpendicular to the radius.
 
-export function contactAt(c: Point4, a: number): Contact {
+// `m`, when present, is the full Hermite tangent length at this contact, used
+// on both sides of it. `mIn` / `mOut` override it for the cubic arriving at /
+// leaving this contact, where the two differ. Absent, `outlinePath` falls back
+// to its chord rule for that side.
+export type OutlineNode = Point2 & {
+  tx: number;
+  ty: number;
+  m?: number;
+  mIn?: number;
+  mOut?: number;
+};
+
+export function contactAt(c: Point4, a: number): OutlineNode {
   const cos = Math.cos(a),
     sin = Math.sin(a);
   return { x: c.x + c.r * cos, y: c.y + c.r * sin, tx: -sin, ty: cos };
@@ -23,8 +35,8 @@ export function wrapZeroTau(a: number) {
 export const MAX_ANGLE_PER_BEZIER = Math.PI / 2;
 
 // A stroke of one disc: the full circle.
-export function discLoop(p: Point4): Contact[] {
-  const out: Contact[] = [];
+export function discLoop(p: Point4): OutlineNode[] {
+  const out: OutlineNode[] = [];
   for (let k = 0; k < TAU / MAX_ANGLE_PER_BEZIER; k++) {
     out.push(contactAt(p, k * MAX_ANGLE_PER_BEZIER));
   }

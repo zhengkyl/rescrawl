@@ -1,5 +1,5 @@
-import { chordRule, dist, lerp } from "./math.ts";
-import type { FitNode, Point4, RenderOptions } from "./types.ts";
+import { chordRule, dist, lerp } from "../math.ts";
+import type { Point4 } from "../math.ts";
 
 // Stage 4, centerline half: which samples survive as nodes, and what each node
 // records about the path through it. The outline half is in `greedy.ts`.
@@ -11,6 +11,31 @@ import type { FitNode, Point4, RenderOptions } from "./types.ts";
 // more of the stroke drawn raw and judged later. And there is no line-first
 // rule: a chord that passes the tube test leaves a tangent break at each end,
 // which a wide pen shows as a kink. Only detected corners break tangency.
+
+// The segment between two nodes is a Hermite cubic from the first's out-tangent
+// (`ox`, `oy`, magnitude `mo`) to the second's in-tangent (`ix`, `iy`, `mi`).
+// Zero magnitudes at both ends read as a straight chord. In- and out-tangents
+// differ only at a corner. The radius runs as a Hermite too, with `slope`
+// (dr/ds) as its derivative.
+export type CenterlineNode = Point4 & {
+  ix: number;
+  iy: number;
+  ox: number;
+  oy: number;
+  mi: number;
+  mo: number;
+  slope: number; // dr/ds: how fast the radius grows along the stroke here
+  corner: boolean; // detected as a corner, so nothing was fitted across it
+};
+
+// Every engine runs `fitCurve`, so every engine takes these.
+export type FitOptions = {
+  maxWidth?: number; // width at a standstill; the unit the lengths below are measured in
+  fitTol?: number; // ink the shape may gain where a sample is dropped, as a fraction of local r
+  fitCornerAngle?: number; // deg; a turn sharper than this over `fitWindow` is a corner
+  fitWindow?: number; // × maxWidth either side of a point that turn, tangent and radius slope are read over
+  fitHorizon?: number; // × maxWidth a segment may span before it commits regardless
+};
 
 const DEG = Math.PI / 180;
 
@@ -97,7 +122,7 @@ export function solveMagnitudes(
   return [ma, mb];
 }
 
-const single = (p: Point4): FitNode => ({
+const single = (p: Point4): CenterlineNode => ({
   ...p,
   ix: 1,
   iy: 0,
@@ -109,7 +134,7 @@ const single = (p: Point4): FitNode => ({
   corner: false,
 });
 
-export function fitCurve(pts: Point4[], o: Required<RenderOptions>): FitNode[] {
+export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode[] {
   const n = pts.length;
   if (n === 0) return [];
   if (n === 1) return [single(pts[0])];
@@ -322,7 +347,7 @@ export function fitCurve(pts: Point4[], o: Required<RenderOptions>): FitNode[] {
   };
 
   // --- greedy extension, one run at a time ---
-  const nodeAt = (i: number): FitNode => ({
+  const nodeAt = (i: number): CenterlineNode => ({
     ...pts[i],
     ix: tin[2 * i],
     iy: tin[2 * i + 1],
@@ -333,7 +358,7 @@ export function fitCurve(pts: Point4[], o: Required<RenderOptions>): FitNode[] {
     slope: slope[i],
     corner: corner[i] === 1,
   });
-  const nodes: FitNode[] = [nodeAt(0)];
+  const nodes: CenterlineNode[] = [nodeAt(0)];
 
   const commit = (bi: number, m: [number, number]) => {
     const a = nodes[nodes.length - 1];
