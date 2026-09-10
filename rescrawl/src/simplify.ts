@@ -1,5 +1,5 @@
-import { lerp } from "./math";
-import type { Point4 } from "./types";
+import { lerp } from "./math.ts";
+import type { Point4 } from "./types.ts";
 
 const MAX_RUN = 64;
 
@@ -33,38 +33,6 @@ function covered(a: Point4, b: Point4, p: Point4, tol: number): boolean {
   return gap > 0 && dist2 <= gap * gap;
 }
 
-export function simplify(points: Point4[], tol: number, maxMs = Infinity, live = 0): Point4[] {
-  const n = points.length;
-  if (n <= 2) return points;
-
-  // The simplified part is points[0 .. cut - 1]; points[cut - 1] is the last
-  // committed node and everything from it on is passed through as sampled.
-  const cut = n - Math.max(0, Math.floor(live));
-  if (cut < 2) return points;
-
-  const out = [points[0]];
-  let a = 0; // anchor: index of the last kept point
-  let i = 1; // furthest chord end that still covers everything behind it
-  while (i < cut - 1) {
-    // Would extending the chord to i + 1 still cover points (a, i]?
-    let fits = i - a <= MAX_RUN && points[i + 1].t - points[a].t <= maxMs;
-    for (let j = a + 1; fits && j <= i; j++) {
-      fits = covered(points[a], points[i + 1], points[j], tol);
-    }
-    if (fits) {
-      i++;
-      continue;
-    }
-    out.push(points[i]);
-    a = i;
-    i = a + 1;
-  }
-  for (let j = cut - 1; j < n; j++) out.push(points[j]);
-  return out;
-}
-
-// removes points completely covered by another
-// these have no tangent lines between, so breaks downstream math
 export function dropContained(pts: Point4[]) {
   const out: Point4[] = [];
   for (const p of pts) {

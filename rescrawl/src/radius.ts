@@ -1,5 +1,5 @@
-import { dist, lerp } from "./math";
-import type { Point3, Point4, RenderOptions } from "./types";
+import { dist, lerp } from "./math.ts";
+import type { Point3, Point4, RenderOptions } from "./types.ts";
 
 function nextEma(current: number, target: number, delta: number, tauConst: number) {
   const stepWeight = delta / tauConst;

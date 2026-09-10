@@ -18,7 +18,7 @@ function StageCounts() {
   const i = activeStrokeAt(strokes, t) ?? strokes.length - 1;
   const stroke = strokes[i];
   const live = withinStroke(stroke, t);
-  const { outline, stages } = inkStages(stroke, inkOptions, live ? t : Infinity, live);
+  const { outline, stages } = inkStages(stroke, inkOptions, live ? t : Infinity);
 
   return (
     <div class="stage-counts">

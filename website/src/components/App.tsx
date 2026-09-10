@@ -11,13 +11,12 @@ import {
   inkStages,
   pickStagePoint,
   renderInk,
-  STRATEGY_DEFS,
   strokeStages,
 } from "../curves";
 import { useStrokeCache } from "../hooks/useStrokeCache";
 import { useStrokes } from "../strokeStore";
 import type { Stroke } from "../utils";
-import { activeStrokeAt, strokeEnd, withinStroke } from "../utils";
+import { strokeEnd, withinStroke } from "../utils";
 import { drawLine } from "./strokeRender";
 
 const INK_CHUNK = 128; // strokes per settled band
@@ -93,33 +92,9 @@ function ActiveInk({
     <g>
       {strokes.map((s, i) =>
         withinStroke(s, drawTime)
-          ? drawLine(renderInk(s, inkOptions, drawTime, true), i, INK_COLOR)
+          ? drawLine(renderInk(s, inkOptions, drawTime), i, INK_COLOR)
           : null,
       )}
-    </g>
-  );
-}
-
-// The stroke under the playhead — highlighted while idle so
-// it's clear which stroke the current time belongs to. Its own component so the
-// per-frame read stays out of <App>, and so it keeps painting over the overlays.
-function ActiveHighlight({
-  strokes,
-  elapsed,
-  isIdle,
-  primary,
-}: {
-  strokes: Stroke[];
-  elapsed: Signal<number>;
-  isIdle: boolean;
-  primary: ActiveStrategy;
-}) {
-  const drawTime = elapsed.value;
-  const active = !isIdle ? null : activeStrokeAt(strokes, drawTime);
-  if (active === null || !strokes[active]) return null;
-  return (
-    <g>
-      {drawLine(primary.def.render(strokes[active], primary.param, drawTime), "active", "#4f8ef7")}
     </g>
   );
 }
@@ -202,11 +177,10 @@ function drawDebug(
   stroke: Stroke,
   options: InkOptions,
   t: number,
-  live: boolean,
   key: string | number,
   layers: DebugLayers,
 ) {
-  const { curve, outline, stages } = inkStages(stroke, options, t, live);
+  const { curve, outline, stages } = inkStages(stroke, options, t);
   return (
     <g key={key}>
       {layers.circles &&
@@ -290,7 +264,7 @@ function OverlayStrategy({
           // Debug geometry depends on ink options + layers (not cacheable); curve
           // strategies are independent of ink options, so they're cached.
           return isDebug
-            ? drawDebug(s, inkOptions, Infinity, false, i, debug)
+            ? drawDebug(s, inkOptions, Infinity, i, debug)
             : drawLine(
                 cache.get(s, def.id, () => def.render(s, param, Infinity)),
                 i,
@@ -309,7 +283,7 @@ function OverlayStrategy({
         {strokes.map((s, i) =>
           withinStroke(s, drawTime)
             ? isDebug
-              ? drawDebug(s, inkOptions, drawTime, true, i, debug)
+              ? drawDebug(s, inkOptions, drawTime, i, debug)
               : drawLine(def.render(s, param, drawTime), i, def.color)
             : null,
         )}
@@ -337,11 +311,11 @@ function LiveStroke({
   if (live === null) return null;
   return (
     <>
-      <g>{drawLine(renderInk(live, inkOptions, Infinity, true), "live-ink", INK_COLOR)}</g>
+      <g>{drawLine(renderInk(live, inkOptions, Infinity), "live-ink", INK_COLOR)}</g>
       {strategies.map(({ def, param }) => (
         <g key={`live-${def.id}`}>
           {def.id === "debug"
-            ? drawDebug(live, inkOptions, Infinity, true, "live-dbg", debug)
+            ? drawDebug(live, inkOptions, Infinity, "live-dbg", debug)
             : drawLine(def.render(live, param, Infinity), "live", def.color)}
         </g>
       ))}
@@ -465,13 +439,7 @@ export function App() {
     let best: HoverPick | null = null;
     for (const s of strokes) {
       if (s[0].t > t || !nearCursor(s, x, y, pad)) continue;
-      const hit = pickStagePoint(
-        strokeStages(s, inkOptions, t, withinStroke(s, t)),
-        debug,
-        x,
-        y,
-        reach,
-      );
+      const hit = pickStagePoint(strokeStages(s, inkOptions, t), debug, x, y, reach);
       if (hit === null) continue;
       // Every later stroke now has to beat this one to take the readout.
       reach = hit.d;
@@ -485,11 +453,6 @@ export function App() {
   // The document, not the capture: what is drawn is what a file would hold.
   const strokes = store.strokes.value;
   const activeStrategies = useMemo(() => getActiveStrategies(strategies), [strategies]);
-  const primaryStrategy: ActiveStrategy = activeStrategies[0] ?? {
-    def: STRATEGY_DEFS[0],
-    param: 0,
-  };
-
   // The readout only exists where its circles do: debug overlay on, and at least
   // one layer that carries a radius. Anything that can move the ink out from
   // under a parked cursor (playback, or the layers going away) drops it, since
@@ -570,14 +533,6 @@ export function App() {
         ))}
         <ActiveInk strokes={strokes} elapsed={clock.elapsed} inkOptions={inkOptions} />
         {overlayLayer}
-
-        {/* Active stroke highlight (under the playhead, while not recording) */}
-        <ActiveHighlight
-          strokes={strokes}
-          elapsed={clock.elapsed}
-          isIdle={clock.isIdle}
-          primary={primaryStrategy}
-        />
 
         {/* In-progress stroke */}
         <LiveStroke

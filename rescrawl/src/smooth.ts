@@ -1,4 +1,4 @@
-import type { Point4, RenderOptions } from "./types";
+import type { Point4, RenderOptions } from "./types.ts";
 
 // --- stage 2 of 4: moving average over position ---
 //
@@ -10,10 +10,16 @@ import type { Point4, RenderOptions } from "./types";
 // point, and the two endpoints pass through untouched. A fixed window would
 // instead have to drop the `windowRadius` points at each end, which detaches the
 // stroke from where the pen actually started and stopped.
+//
+// `smoothWindow` 0 or 1 is no smoothing, which is the default: stage 1 already
+// smooths the radius, and the fit's own tolerance absorbs most position noise,
+// so this is a knob to reach for rather than a pass to run by default.
 export function smoothPositions(points: Point4[], o: Required<RenderOptions>): Point4[] {
   const n = points.length;
+  // Off by default, and off is the hot path: hand the same points straight
+  // back rather than copying every one of them to itself each frame.
+  if (o.smoothWindow < 2 || n === 0) return points;
   const out: Point4[] = [];
-  if (n === 0) return out;
 
   // TODO, derive stay/travel from lowest interval?
   // exclusive prefix sums: prefixX[i] is the sum of stroke[0..i-1]
@@ -24,9 +30,17 @@ export function smoothPositions(points: Point4[], o: Required<RenderOptions>): P
     prefixY.push(prefixY[i] + points[i].y);
   }
 
-  const maxRadius = Math.floor(Math.max(o.smoothWindow, 1) / 2);
+  const maxRadius = Math.floor(o.smoothWindow / 2);
   for (let i = 0; i < n; i++) {
     const w = Math.min(maxRadius, i, n - 1 - i);
+    // At the ends the window is the point itself. Take it verbatim rather than
+    // averaging it with nothing: differencing the prefix sums there subtracts
+    // two large accumulated numbers and loses the low bits, so the endpoint
+    // would drift by ~1e-12 instead of passing through exactly.
+    if (w === 0) {
+      out.push(points[i]);
+      continue;
+    }
     const start = i - w;
     const end = i + w;
     const span = end - start + 1;

@@ -1,5 +1,5 @@
-import { TAU } from "./math";
-import type { Contact, Point4 } from "./types";
+import { TAU } from "./math.ts";
+import type { Contact, Point4 } from "./types.ts";
 
 // --- what every outline is made of ---
 //

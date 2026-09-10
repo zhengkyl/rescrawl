@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "pnpm --filter website dev",
-    "lab": "pnpm --filter lab dev",
+    "test": "node --test rescrawl/test/*.test.ts",
     "fmt": "oxfmt"
   },
   "devDependencies": {

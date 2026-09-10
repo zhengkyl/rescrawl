@@ -1,5 +1,5 @@
-import { chordRule, dist } from "./math";
-import type { Contact, FitNode, Point2 } from "./types";
+import { chordRule, dist } from "./math.ts";
+import type { Contact, FitNode, Point2 } from "./types.ts";
 
 // --- path emission ---
 //
@@ -48,7 +48,11 @@ class Pen {
   private sep = false; // does the next number need a separator?
   private dotted = false; // did the last number already spend its "."?
 
-  constructor(private digits: number) {}
+  private digits: number;
+
+  constructor(digits: number) {
+    this.digits = digits;
+  }
 
   private word(cmd: string) {
     if (cmd === this.cmd) return;
@@ -137,7 +141,8 @@ export function hermiteMag(a: Contact, b: Contact): number {
 
 // The fitted centerline as it was fitted: a line where the fit said line, a
 // cubic on the stored tangents where it said cubic. Unlike `centerlinePath`,
-// this one is faithful; it is the fit engine's `spine`.
+// this one is faithful. The engines do not return it -- a consumer that wants
+// the centerline as path data (the debug views, and nothing else) calls this.
 export function fitPath(ns: FitNode[], digits = DEFAULT_DIGITS): string {
   if (ns.length === 0) return "";
   const pen = new Pen(digits);

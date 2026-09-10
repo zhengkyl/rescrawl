@@ -1,14 +1,13 @@
-import { arcAngles, contactAt, discLoop } from "./contact";
-import type { Shape } from "./engine";
-import { basis, fitCurve, fitOptions } from "./fit";
-import { clamp11, dist, wrapPi } from "./math";
-import { fitPath } from "./svg";
-import type { Contact, FitNode, Point4, RenderOptions } from "./types";
+import { arcAngles, contactAt, discLoop } from "./contact.ts";
+import type { Shape } from "./engine.ts";
+import { basis, fitCurve } from "./fit.ts";
+import { clamp11, dist, wrapPi } from "./math.ts";
+import type { Contact, FitNode, Point4, RenderOptions } from "./types.ts";
 
 // --- the sampled engine: fit the centerline, then walk the envelope ---
 //
-// Stage 3b is `fitCurve`, exactly as the `fit` engine uses it: the same nodes,
-// the same tangents, the same settled-commit rule. Stage 4 is the other way
+// The nodes come from `fitCurve`, exactly as the `fit` engine takes them: the same nodes,
+// the same tangents, the same horizon-commit rule. Stage 4 is the other way
 // round from `toOutlineFit`.
 //
 //   fit       one cubic per side per segment. The two end contacts and their
@@ -44,17 +43,19 @@ import type { Contact, FitNode, Point4, RenderOptions } from "./types";
 
 // Turns smaller than this are treated as smooth, so a node gets one contact
 // per side. Same threshold as `toOutlineFit`, its own copy.
+// Beyond this fold, the inner corner point is not a construction any more.
+// It sits at r·sec(g/2), and sec runs away as the fold approaches a straight
+// reversal: at 178 degrees it is 57·r, which throws the contact clear across
+// the stroke and the outline collapses inward behind it. Past this the crossed
+// pair is used instead -- exact at any angle, and what runs with `cornerPoint`
+// off anyway.
+const MAX_CORNER_POINT = 150 * (Math.PI / 180);
 const SMOOTH_TURN = 0.02;
 // Sub-chords used to measure a segment's arc length, to decide how many
 // samples it gets. It only picks a step count, so it can be coarse.
 const LENGTH_SAMPLES = 8;
 
-export type SampledOptions = {
-  step: number; // px along the centerline between outline contacts
-  cornerPoint: boolean; // inside of a corner: one contact where the tangent lines cross
-};
-
-export function toOutlineSampled(ns: FitNode[], o: SampledOptions): Contact[] {
+export function toOutlineSampled(ns: FitNode[], o: Required<RenderOptions>): Contact[] {
   const n = ns.length;
   if (n === 0) return [];
   if (n === 1) return discLoop(ns[0]);
@@ -130,7 +131,7 @@ export function toOutlineSampled(ns: FitNode[], o: SampledOptions): Contact[] {
       L += dist(prev, c);
       prev = c;
     }
-    steps[k] = Math.max(1, Math.ceil(L / o.step));
+    steps[k] = Math.max(1, Math.ceil(L / (o.sampleStep * o.maxWidth)));
   }
 
   const out: Contact[] = [];
@@ -154,7 +155,7 @@ export function toOutlineSampled(ns: FitNode[], o: SampledOptions): Contact[] {
       pushArc(p, from, to);
       return;
     }
-    if (o.cornerPoint) {
+    if (o.cornerPoint && -g <= MAX_CORNER_POINT) {
       // Both tangent lines touch this disc, so they cross on the bisector at
       // r·sec(g/2). One contact there, arriving along the in-line with a zero
       // handle out, so the next run leaves on its own tangent.
@@ -205,13 +206,9 @@ export function toOutlineSampled(ns: FitNode[], o: SampledOptions): Contact[] {
 
 // --- the engine ---
 
-// Reads: tol, liveBuffer, fitCornerAngle, fitCornerDist, fitHorizon,
-// sampleStep, cornerPoint.
+// Reads: fitTol, fitCornerAngle, fitWindow, fitHorizon, sampleStep,
+// cornerPoint.
 export function sampledEngine(distinct: Point4[], o: Required<RenderOptions>): Shape {
-  const nodes = fitCurve(distinct, fitOptions(o));
-  return {
-    nodes,
-    outline: toOutlineSampled(nodes, { step: o.sampleStep, cornerPoint: o.cornerPoint }),
-    spine: fitPath(nodes),
-  };
+  const nodes = fitCurve(distinct, o);
+  return { nodes, outline: toOutlineSampled(nodes, o) };
 }

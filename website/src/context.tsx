@@ -27,6 +27,8 @@ export type AppContextValue = {
   setExportOpen: Dispatch<StateUpdater<boolean>>;
   settingsOpen: boolean;
   setSettingsOpen: Dispatch<StateUpdater<boolean>>;
+  benchOpen: boolean;
+  setBenchOpen: Dispatch<StateUpdater<boolean>>;
 };
 
 export const AppContext = createContext<AppContextValue>(null as unknown as AppContextValue);

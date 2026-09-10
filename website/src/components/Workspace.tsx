@@ -2,13 +2,20 @@ import { batch } from "@preact/signals";
 import { useEffect, useState } from "preact/hooks";
 import { AppContext } from "../context";
 import type { DebugLayers, InkOptions, StrategiesState } from "../curves";
-import { DEBUG_DEFAULTS, getDefaultStrategies, INK_DEFAULTS } from "../curves";
+import {
+  DEBUG_DEFAULTS,
+  getDefaultStrategies,
+  INK_DEFAULTS,
+  INK_STORAGE_KEY,
+  withKnownEngine,
+} from "../curves";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { usePlayhead } from "../hooks/usePlayhead";
 import { applyStrokeOp, useStrokes } from "../strokeStore";
 import type { Config } from "../utils";
 import { DEFAULT_CONFIG } from "../utils";
 import { App } from "./App";
+import { BenchDialog } from "./BenchDialog";
 import { CanvasPanel, Controls } from "./Controls";
 import { CurvePanel } from "./CurvePanel";
 import { ExportDialog } from "./ExportDialog";
@@ -25,20 +32,23 @@ export function Workspace() {
 
   const [strategies, setStrategies] = useState<StrategiesState>(getDefaultStrategies);
   const [debug, setDebug] = useState<DebugLayers>(DEBUG_DEFAULTS);
-  const [inkOptions, setInkOptions] = useState<InkOptions>(() => ({
-    ...INK_DEFAULTS,
-    ...JSON.parse(localStorage.getItem("rescrawl-ink") || "{}"),
-  }));
+  const [inkOptions, setInkOptions] = useState<InkOptions>(() =>
+    withKnownEngine({
+      ...INK_DEFAULTS,
+      ...JSON.parse(localStorage.getItem(INK_STORAGE_KEY) || "{}"),
+    }),
+  );
   const [config, setConfig] = useState<Config>(() => ({
     ...DEFAULT_CONFIG,
     ...JSON.parse(localStorage.getItem("rescrawl-config") || "{}"),
   }));
   const [exportOpen, setExportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [benchOpen, setBenchOpen] = useState(false);
 
   // Persist config + ink options; reflect sidebar side on <body>.
   useEffect(() => {
-    localStorage.setItem("rescrawl-ink", JSON.stringify(inkOptions));
+    localStorage.setItem(INK_STORAGE_KEY, JSON.stringify(inkOptions));
   }, [inkOptions]);
   useEffect(() => {
     localStorage.setItem("rescrawl-config", JSON.stringify(config));
@@ -105,6 +115,8 @@ export function Workspace() {
         setExportOpen,
         settingsOpen,
         setSettingsOpen,
+        benchOpen,
+        setBenchOpen,
       }}
     >
       <div id="main-area">
@@ -128,6 +140,7 @@ export function Workspace() {
         </div>
       </div>
       {exportOpen && <ExportDialog />}
+      {benchOpen && <BenchDialog />}
       <SettingsDialog />
     </AppContext.Provider>
   );

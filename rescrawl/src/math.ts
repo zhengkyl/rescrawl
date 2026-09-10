@@ -1,4 +1,4 @@
-import type { Point2 } from "./types";
+import type { Point2 } from "./types.ts";
 
 export const TAU = Math.PI * 2;
 

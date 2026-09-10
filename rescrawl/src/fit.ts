@@ -1,45 +1,43 @@
-import { arcAngles, contactAt, discLoop } from "./contact";
-import type { Shape } from "./engine";
-import { chordRule, clamp11, dist, lerp, wrapPi } from "./math";
-import { fitPath } from "./svg";
-import type { Contact, FitNode, Point4, RenderOptions } from "./types";
+import { arcAngles, contactAt, discLoop } from "./contact.ts";
+import type { Shape } from "./engine.ts";
+import { chordRule, clamp11, dist, lerp, wrapPi } from "./math.ts";
+import type { Contact, FitNode, Point4, RenderOptions } from "./types.ts";
 
 // --- the fit engine ---
 //
-// --- stage 3b: a greedy line-and-cubic fit that never revisits ---
+// --- stage 4, the centerline half: a greedy line-and-cubic fit that never revisits ---
 //
 // The centerline is simplified while it is being drawn, and what has been
-// drawn must not move. Those two pull against each other, and this is the
-// settlement:
+// drawn must not move. Those two pull against each other, and `fitHorizon` is
+// what settles them:
 //
-//   settled    a point's tangent, radius slope and corner status all read from
-//              a window `cornerDist` either side of it, and its corner status
-//              also depends on the windows of the points inside its own. Once
-//              the pen is about 2·cornerDist past a point, none of that can
-//              change. Only settled points are eligible as segment ends, so a
-//              committed segment is final: no later sample can re-split it.
-//   horizon    a segment also commits once it spans `horizon` px, whether or
-//              not it could go on. The one segment still open is the only
-//              simplified ink that changes from frame to frame (it refits
-//              within tolerance as samples settle), and the horizon bounds how
-//              far behind the pen that reaches. Raise it for a sparser path,
-//              lower it for a stiller one; Infinity commits on fit failure only.
-//   live       the settled edge is also held `live` samples behind the pen,
-//              on top of what the windows require. Nothing commits until that
-//              many samples sit behind it. 0 for a finished stroke.
-//   tail       between the settled edge and the pen the samples are drawn as
-//              they are, one node each on their own tangents. That is the zone
-//              that is still moving anyway, and it stays that way at pen-up
-//              too, so lifting the pen changes nothing on screen.
+//   horizon    a segment commits once it spans `fitHorizon` px, whether or not
+//              it could go on. The one segment still open is the only ink that
+//              changes from frame to frame (it refits within tolerance as
+//              samples arrive), and the horizon bounds how far behind the pen
+//              that reaches. Raise it for a sparser path, lower it for a
+//              stiller one; Infinity commits on fit failure only.
+//
+// There is no separate live path: a growing stroke is fitted exactly like a
+// finished one. There used to be a settled edge here, holding back the last
+// 2·`fitWindow` px -- the stretch whose tangents and corner flags can still
+// change -- and drawing it as one node per raw sample instead. It was measured
+// and removed, the same way the `live` buffer was removed from `simplify`, and
+// for the same reason: withholding samples does not stop ink moving, it leaves
+// more of the stroke drawn raw and judged later, so the settle boundary moved
+// 12-24px FURTHER behind the pen. It also bought nothing against corner
+// flicker, since the tail carried each sample's `corner` flag anyway. What it
+// held back was in any case well inside the open segment the horizon was
+// already refitting every frame.
 //
 // The fit itself, per run between corners, keeps the greedy Reumann-Witkam
 // shape of `simplify`: extend the candidate while it covers every sample in
 // the same tube test, commit the last one that did.
 //
-//   corners    a point where the direction over `cornerDist` px either side
-//              turns by more than `cornerAngle`; a local max of that angle.
+//   corners    a point where the direction over `fitWindow` px either side
+//              turns by more than `fitCornerAngle`; a local max of that angle.
 //              Corners split the stroke into runs; nothing is fitted across one.
-//   tangents   the secant from `cornerDist` behind to `cornerDist` ahead, kept
+//   tangents   the secant from `fitWindow` behind to `fitWindow` ahead, kept
 //              inside the run, so a corner's in-tangent only sees the run
 //              behind it and its out-tangent only the run ahead.
 //   segment    a Hermite cubic through the two ends on those tangents, its
@@ -56,17 +54,12 @@ import type { Contact, FitNode, Point4, RenderOptions } from "./types";
 // is what makes the nodes invisible; only detected corners break it.
 //
 // The node list is the stroke's representation: what is drawn, and what is
-// worth storing. Re-running this on the full sample list reproduces exactly
-// the nodes that were displayed while drawing, because every decision reads
-// only settled data.
+// worth storing. Every node behind the open segment is reproduced exactly by
+// re-running this on the full sample list; the open segment itself is refitted,
+// so the last `fitHorizon` px of a growing stroke can still shift by up to the
+// tolerance before they commit.
 
-export type FitOptions = {
-  tol: number; // ink the shape may gain per dropped point, as a fraction of local r
-  cornerAngle: number; // rad
-  cornerDist: number; // px either side of a point that turn, tangent and slope are measured over
-  horizon: number; // px a segment may span before it commits regardless
-  live: number; // samples held out of the fit behind the pen; 0 for a finished stroke
-};
+const DEG = Math.PI / 180;
 
 const MAX_RUN = 64;
 // Below this, the normal equations are treated as singular and the chord rule
@@ -166,17 +159,19 @@ const single = (p: Point4): FitNode => ({
   corner: false,
 });
 
-export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
+export function fitCurve(pts: Point4[], o: Required<RenderOptions>): FitNode[] {
   const n = pts.length;
   if (n === 0) return [];
   if (n === 1) return [single(pts[0])];
 
-  // Cumulative chord length, the parameter everything below is measured along.
+  // Cumulative chord length
   const S = new Float64Array(n);
   for (let i = 1; i < n; i++) S[i] = S[i - 1] + dist(pts[i - 1], pts[i]);
 
-  const D = o.cornerDist;
-  // First index at least D behind / ahead of i along the stroke, clamped.
+  const D = o.fitWindow * o.maxWidth;
+
+  // First index at least D behind / ahead of i along the stroke, clamped. Used
+  // where an index is what is wanted: loop bounds, and the corner scan.
   const back = (i: number, lo: number) => {
     let j = i;
     while (j > lo && S[i] - S[j] < D) j--;
@@ -188,25 +183,104 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
     return j;
   };
 
+  // The point exactly D behind / ahead of i, interpolated along the polyline
+  // rather than snapped to whichever sample happens to sit past the mark.
+  //
+  // Snapping made the arm `D plus however far the next sample was`, which is
+  // fine while samples are closer together than D and useless once they are
+  // not: on a stroke sampled every 27px the arm measured 26.5px against a
+  // nominal 6, so the window stopped being a window and `fitWindow` did
+  // nothing. Interpolating holds the arm at D whatever the sample rate, and
+  // where the samples really are coarser than D it yields the chord direction,
+  // which is the most the data supports. It also makes the two arms equal, so
+  // the secant is a true central difference instead of the tangent at a point
+  // displaced by half their difference.
+  //
+  // Both clamp to the run, where a short asymmetric arm is unavoidable.
+  type Arm = { x: number; y: number; r: number; s: number };
+  const armBack = (i: number, lo: number): Arm => {
+    let j = i;
+    while (j > lo && S[i] - S[j] < D) j--;
+    const target = S[i] - D;
+    if (j === i || target <= S[j]) return { x: pts[j].x, y: pts[j].y, r: pts[j].r, s: S[j] };
+    const seg = S[j + 1] - S[j];
+    const f = seg > 0 ? (target - S[j]) / seg : 0;
+    return {
+      x: lerp(pts[j].x, pts[j + 1].x, f),
+      y: lerp(pts[j].y, pts[j + 1].y, f),
+      r: lerp(pts[j].r, pts[j + 1].r, f),
+      s: target,
+    };
+  };
+  const armFwd = (i: number, hi: number): Arm => {
+    let j = i;
+    while (j < hi && S[j] - S[i] < D) j++;
+    const target = S[i] + D;
+    if (j === i || target >= S[j]) return { x: pts[j].x, y: pts[j].y, r: pts[j].r, s: S[j] };
+    const seg = S[j] - S[j - 1];
+    const f = seg > 0 ? (target - S[j - 1]) / seg : 0;
+    return {
+      x: lerp(pts[j - 1].x, pts[j].x, f),
+      y: lerp(pts[j - 1].y, pts[j].y, f),
+      r: lerp(pts[j - 1].r, pts[j].r, f),
+      s: target,
+    };
+  };
+
   // --- corners ---
   const angle = new Float64Array(n);
   for (let i = 1; i < n - 1; i++) {
-    const p = pts[back(i, 0)];
+    const p = armBack(i, 0);
     const c = pts[i];
-    const q = pts[fwd(i, n - 1)];
+    const q = armFwd(i, n - 1);
     const ax = c.x - p.x;
     const ay = c.y - p.y;
     const bx = q.x - c.x;
     const by = q.y - c.y;
     angle[i] = Math.atan2(Math.abs(ax * by - ay * bx), ax * bx + ay * by);
   }
+  // Where the pen doubles back, the angle above reads a flat 180 degrees across
+  // several samples, so the local max below is a plateau and the tie-break is
+  // what decides where the corner lands. Taking the earliest put it BEFORE the
+  // turnaround: the extreme sample was then interior to the outgoing run, and
+  // its tangent -- clamped to that run -- saw only the way back. The outline
+  // was built as if the pen ran straight through the tip, so it cut across it
+  // instead of wrapping it, and half of that disc finished up outside the ink.
+  //
+  // The turnaround is the sample whose own two neighbours point against each
+  // other. That is a local test, exact, and needs no window. Rank it above its
+  // equals so a tie goes to it rather than to whichever came first.
+  const turns = new Uint8Array(n);
+  for (let i = 1; i < n - 1; i++) {
+    const ax = pts[i].x - pts[i - 1].x;
+    const ay = pts[i].y - pts[i - 1].y;
+    const bx = pts[i + 1].x - pts[i].x;
+    const by = pts[i + 1].y - pts[i].y;
+    if (ax * bx + ay * by < 0) turns[i] = 1;
+  }
+  // -1 / 0 / +1 as j is a weaker, equal, or stronger corner candidate than i.
+  // A sample that genuinely reverses outranks one that merely reads sharp,
+  // whatever the angles say. Ranking by angle first and using the reversal only
+  // to settle exact ties does not work: across a plateau the angles differ in
+  // their last bits, never compare equal, and the corner lands on whichever
+  // neighbour's window happens to read a hair wider than the tip's.
+  //
+  // Only called with an `i` that already cleared the threshold, so a `j` that
+  // has not is always the weaker of the two.
+  const SHARP = o.fitCornerAngle * DEG;
+  const rank = (j: number, i: number) => {
+    if (angle[j] < SHARP) return -1;
+    if (turns[j] !== turns[i]) return turns[j] < turns[i] ? -1 : 1;
+    return angle[j] === angle[i] ? 0 : angle[j] < angle[i] ? -1 : 1;
+  };
+
   const corner = new Uint8Array(n);
   for (let i = 1; i < n - 1; i++) {
-    if (angle[i] < o.cornerAngle) continue;
-    // Local max over ±D; a tie goes to the earlier point.
+    if (angle[i] < SHARP) continue;
+    // Local max over ±D; among equals the turnaround wins, then the earlier point.
     let max = true;
-    for (let j = back(i, 0); max && j < i; j++) max = angle[j] < angle[i];
-    for (let j = i + 1, hi = fwd(i, n - 1); max && j <= hi; j++) max = angle[j] <= angle[i];
+    for (let j = back(i, 0); max && j < i; j++) max = rank(j, i) < 0;
+    for (let j = i + 1, hi = fwd(i, n - 1); max && j <= hi; j++) max = rank(j, i) <= 0;
     if (max) corner[i] = 1;
   }
 
@@ -215,8 +289,8 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
   const tin = new Float64Array(2 * n);
   const tout = new Float64Array(2 * n);
   const secant = (i: number, lo: number, hi: number, into: Float64Array) => {
-    const p = pts[back(i, lo)];
-    const q = pts[fwd(i, hi)];
+    const p = armBack(i, lo);
+    const q = armFwd(i, hi);
     let dx = q.x - p.x;
     let dy = q.y - p.y;
     const d = Math.sqrt(dx * dx + dy * dy);
@@ -256,36 +330,18 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
   // not cut at them.
   const slope = new Float64Array(n);
   for (let i = 0; i < n; i++) {
-    const p = back(i, 0);
-    const q = fwd(i, n - 1);
-    const ds = S[q] - S[p];
-    slope[i] = ds > 0 ? (pts[q].r - pts[p].r) / ds : 0;
+    const p = armBack(i, 0);
+    const q = armFwd(i, n - 1);
+    const ds = q.s - p.s;
+    slope[i] = ds > 0 ? (q.r - p.r) / ds : 0;
   }
-
-  // --- the settled edge ---
-  // The last index whose own window, and the windows of every point inside
-  // it, stop short of the tip. Never the tip itself, so the tail is never
-  // empty, and lifting the pen adds no new information about anything else.
-  let settled = 0;
-  for (let i = n - 1; i > 0; i--) {
-    if (fwd(fwd(i, n - 1), n - 1) < n - 1) {
-      settled = i;
-      break;
-    }
-  }
-  // The live buffer holds that edge further back: the last `live` samples stay
-  // in the tail however far the pen has run on, so a node only commits once
-  // that many samples sit behind it. It is 0 for a finished stroke -- pen up,
-  // no more data coming, so the whole stroke may settle.
-  const hold = n - 1 - Math.max(0, Math.floor(o.live));
-  if (settled > hold) settled = hold > 0 ? hold : 0;
 
   // --- the tube test, against a chord or a cubic ---
   // Room between the sample's rim and the tube wall at parameter u; the disc
   // fits when its centre is within `gap` of the curve there. Same rule as
   // `covered` in simplify.ts.
   const inTube = (a: Point4, b: Point4, p: Point4, u: number, dx: number, dy: number) => {
-    const gap = lerp(a.r, b.r, u) - p.r + o.tol * p.r;
+    const gap = lerp(a.r, b.r, u) - p.r + o.fitTol * p.r;
     return gap > 0 && dx * dx + dy * dy <= gap * gap;
   };
 
@@ -368,11 +424,11 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
     nodes.push(b);
   };
 
-  // Runs end at corners inside the settled part, and the last one at the
-  // settled edge: its final segment is the open one.
+  // Runs end at corners, and the last one at the final sample: its closing
+  // segment is the open one while the stroke is still growing.
   const runs = [0];
-  for (let i = 1; i < settled; i++) if (corner[i]) runs.push(i);
-  if (settled > 0) runs.push(settled);
+  for (let i = 1; i < n - 1; i++) if (corner[i]) runs.push(i);
+  runs.push(n - 1);
   for (let k = 0; k < runs.length - 1; k++) {
     const lo = runs[k];
     const hi = runs[k + 1];
@@ -383,7 +439,7 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
     // does.
     let fit = cubicCovers(a, i)!;
     while (i < hi) {
-      if (i - a < MAX_RUN && S[i + 1] - S[a] <= o.horizon) {
+      if (i - a < MAX_RUN && S[i + 1] - S[a] <= o.fitHorizon * o.maxWidth) {
         const m = cubicCovers(a, i + 1);
         if (m) {
           fit = m;
@@ -399,16 +455,6 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
     commit(hi, fit);
   }
 
-  // The tail: every sample past the settled edge as a node on its own
-  // tangents, joined by chord-rule cubics.
-  for (let j = settled + 1; j < n; j++) {
-    const a = nodes[nodes.length - 1];
-    const b = nodeAt(j);
-    const m = chordRule(dist(a, b), a.ox, a.oy, b.ix, b.iy);
-    a.mo = m;
-    b.mi = m;
-    nodes.push(b);
-  }
   return nodes;
 }
 
@@ -441,18 +487,21 @@ export function fitCurve(pts: Point4[], o: FitOptions): FitNode[] {
 // between them; behind, and it is the inside, which gets the crossed pair
 // (or, with `cornerPoint`, one contact where the two tangent lines cross).
 
-export type FitOutlineOptions = {
-  cornerPoint: boolean; // inside of a corner: one contact where the tangent lines cross
-};
-
 // Turns smaller than this are treated as smooth, with one contact at the
 // incoming angle: the arc construction would emit two near-coincident
 // contacts and a cubic between them that is shorter than the drawing error.
+// Beyond this fold, the inner corner point is not a construction any more.
+// It sits at r·sec(g/2), and sec runs away as the fold approaches a straight
+// reversal: at 178 degrees it is 57·r, which throws the contact clear across
+// the stroke and the outline collapses inward behind it. Past this the crossed
+// pair is used instead -- exact at any angle, and what runs with `cornerPoint`
+// off anyway.
+const MAX_CORNER_POINT = 150 * (Math.PI / 180);
 const SMOOTH_TURN = 0.02;
 // Envelope samples inside a segment that the outline cubic is fitted to.
 const ENVELOPE_SAMPLES = [0.2, 0.4, 0.6, 0.8];
 
-export function toOutlineFit(ns: FitNode[], o: FitOutlineOptions): Contact[] {
+export function toOutlineFit(ns: FitNode[], o: Required<RenderOptions>): Contact[] {
   const n = ns.length;
   if (n === 0) return [];
   if (n === 1) return discLoop(ns[0]);
@@ -576,7 +625,7 @@ export function toOutlineFit(ns: FitNode[], o: FitOutlineOptions): Contact[] {
       last.mOut = mOut;
       return;
     }
-    if (o.cornerPoint) {
+    if (o.cornerPoint && -g <= MAX_CORNER_POINT) {
       // Both tangent lines touch this disc, so they cross on the bisector at
       // r·sec(g/2). One contact there, arriving along the in-line with a zero
       // handle out: the next cubic starts from a point on its own tangent
@@ -620,24 +669,8 @@ export function toOutlineFit(ns: FitNode[], o: FitOutlineOptions): Contact[] {
 
 // --- the engine ---
 
-const DEG = Math.PI / 180;
-
-export function fitOptions(o: Required<RenderOptions>): FitOptions {
-  return {
-    tol: o.tol,
-    cornerAngle: o.fitCornerAngle * DEG,
-    cornerDist: o.fitCornerDist,
-    horizon: o.fitHorizon,
-    live: o.liveBuffer,
-  };
-}
-
-// Reads: tol, liveBuffer, fitCornerAngle, fitCornerDist, fitHorizon, cornerPoint.
+// Reads: fitTol, fitCornerAngle, fitWindow, fitHorizon, cornerPoint.
 export function fitEngine(distinct: Point4[], o: Required<RenderOptions>): Shape {
-  const nodes = fitCurve(distinct, fitOptions(o));
-  return {
-    nodes,
-    outline: toOutlineFit(nodes, { cornerPoint: o.cornerPoint }),
-    spine: fitPath(nodes),
-  };
+  const nodes = fitCurve(distinct, o);
+  return { nodes, outline: toOutlineFit(nodes, o) };
 }
