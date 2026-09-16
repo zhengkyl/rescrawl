@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { renderStroke } from "../src/pipeline.ts";
 import type { Point3 } from "../src/math.ts";
+import { FITS, type FitKind, OUTLINES, type OutlineKind, renderStroke } from "../src/pipeline.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 
-// Every length in stage 4 is a multiple of `maxWidth`. Scale the drawing and
-// the pen together and the shape must come out identical, scaled.
-function scaleFree(pts: Point3[]) {
+// Every length in stages 4 and 5 is a multiple of `maxWidth`. Scale the drawing
+// and the pen together and the shape must come out identical, scaled.
+function scaleFree(pts: Point3[], fit: FitKind, outline: OutlineKind) {
   const k = 2;
-  const one = renderStroke(pts, { minWidth: 1.5, maxWidth: 8, thinSpeed: 1 }).outline;
+  const one = renderStroke(pts, { fit, outline, minWidth: 1.5, maxWidth: 8, thinSpeed: 1 }).outline;
   const two = renderStroke(
     pts.map((p) => ({ x: p.x * k, y: p.y * k, t: p.t })),
-    { minWidth: 1.5 * k, maxWidth: 8 * k, thinSpeed: 1 * k },
+    { fit, outline, minWidth: 1.5 * k, maxWidth: 8 * k, thinSpeed: 1 * k },
   ).outline;
   assert.equal(two.length, one.length, "contact count changed with scale");
   for (let i = 0; i < one.length; i++) {
@@ -20,9 +20,17 @@ function scaleFree(pts: Point3[]) {
   }
 }
 
-describe("the fit is scale free", () => {
-  for (const [name, pts] of Object.entries(STROKES)) test(name, () => scaleFree(pts));
-  test(`bench.scrawl (${RECORDED_STROKES.length} strokes)`, () => {
-    RECORDED_STROKES.forEach(scaleFree);
-  });
-});
+// Every fit against every outline, so a new one of either is held to it the
+// moment it is registered.
+for (const fit of Object.keys(FITS) as FitKind[]) {
+  for (const outline of Object.keys(OUTLINES) as OutlineKind[]) {
+    describe(`${fit} + ${outline}: the fit is scale free`, () => {
+      for (const [name, pts] of Object.entries(STROKES)) {
+        test(name, () => scaleFree(pts, fit, outline));
+      }
+      test(`bench.scrawl (${RECORDED_STROKES.length} strokes)`, () => {
+        RECORDED_STROKES.forEach((pts) => scaleFree(pts, fit, outline));
+      });
+    });
+  }
+}

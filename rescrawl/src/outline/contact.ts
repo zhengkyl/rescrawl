@@ -7,16 +7,11 @@ import type { Point2, Point4 } from "../math.ts";
 // increase clockwise. A contact is a point on a disc's rim with the outline's
 // forward tangent there, which is perpendicular to the radius.
 
-// `m`, when present, is the full Hermite tangent length at this contact, used
-// on both sides of it. `mIn` / `mOut` override it for the cubic arriving at /
-// leaving this contact, where the two differ. Absent, `outlinePath` falls back
-// to its chord rule for that side.
+// A point and the direction the loop leaves it in; how far the curve between
+// two of them reaches is the serializer's chord rule, not stored here.
 export type OutlineNode = Point2 & {
   tx: number;
   ty: number;
-  m?: number;
-  mIn?: number;
-  mOut?: number;
 };
 
 export function contactAt(c: Point4, a: number): OutlineNode {

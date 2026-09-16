@@ -1,8 +1,10 @@
 import type { ReadonlySignal, Signal } from "@preact/signals";
 import { batch, useComputed, useSignal } from "@preact/signals";
-import type { ComponentChildren } from "preact";
+import type { ComponentChildren, JSX } from "preact";
 import { useMemo, useRef, useState } from "preact/hooks";
 import type { Point3 } from "rescrawl";
+import type { FixedOptions } from "./fixed";
+import { FIXED_DEFAULTS, FixedSettings, fixedPath } from "./fixed";
 import type { FreehandOptions } from "./freehand";
 import { FREEHAND_DEFAULTS, FreehandSettings, freehandPath } from "./freehand";
 import type { GreedyOptions } from "./greedy";
@@ -21,6 +23,11 @@ const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 10;
 
 const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+
+// How a cell paints its path data. The engines emit closed outlines to fill;
+// a centerline cell emits an open path for SVG to stroke.
+type Ink = JSX.SVGAttributes<SVGPathElement>;
+const FILLED: Ink = { fill: INK, "fill-rule": "nonzero" };
 
 // One camera for the whole grid. Each cell hands in its own bounding rect, so
 // a gesture anchored at the cursor works from whichever cell it started in
@@ -202,10 +209,12 @@ function LiveInk({
   pen,
   render,
   meter,
+  ink,
 }: {
   pen: Pen;
   render: (s: Stroke) => string;
   meter: FrameMeter;
+  ink: Ink;
 }) {
   const pts = pen.points.value;
   if (pts === null) {
@@ -215,7 +224,7 @@ function LiveInk({
   const t0 = performance.now();
   const d = render(pts);
   meter.sample(performance.now() - t0);
-  return <path d={d} fill={INK} fill-rule="nonzero" />;
+  return <path d={d} {...ink} />;
 }
 
 // Path data is ASCII, so one character is one byte.
@@ -287,6 +296,7 @@ function Cell({
   paths,
   render,
   meter,
+  ink = FILLED,
   settings,
 }: {
   title: string;
@@ -296,6 +306,7 @@ function Cell({
   paths: string[];
   render: (s: Stroke) => string;
   meter: FrameMeter;
+  ink?: Ink;
   settings: ComponentChildren;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -356,9 +367,9 @@ function Cell({
       >
         <g transform={view.transform}>
           {paths.map((d, i) => (
-            <path key={i} d={d} fill={INK} fill-rule="nonzero" />
+            <path key={i} d={d} {...ink} />
           ))}
-          <LiveInk pen={pen} render={render} meter={meter} />
+          <LiveInk pen={pen} render={render} meter={meter} ink={ink} />
         </g>
       </svg>
       <div class="cell-hud">
@@ -385,12 +396,14 @@ export function ComparePage() {
   const [strokes, setStrokes] = useState<Stroke[]>([]);
   const [greedy, setGreedy] = useState<GreedyOptions>(GREEDY_DEFAULTS);
   const [freehand, setFreehand] = useState<FreehandOptions>(FREEHAND_DEFAULTS);
+  const [fixed, setFixed] = useState<FixedOptions>(FIXED_DEFAULTS);
 
   const view = useSharedView();
   const pen = usePen((stroke) => setStrokes((prev) => [...prev, stroke]));
   // One meter per cell: they time the same frames through different engines.
   const greedyMeter = useFrameStats();
   const freehandMeter = useFrameStats();
+  const fixedMeter = useFrameStats();
 
   // Committed ink per engine: one pass over the strokes, redone only when they
   // or that engine's knobs change — never while the pen is moving.
@@ -399,6 +412,7 @@ export function ComparePage() {
     () => strokes.map((s) => freehandPath(s, freehand)),
     [strokes, freehand],
   );
+  const fixedPaths = useMemo(() => strokes.map((s) => fixedPath(s, fixed)), [strokes, fixed]);
 
   return (
     <>
@@ -413,6 +427,7 @@ export function ComparePage() {
             setStrokes([]);
             greedyMeter.reset();
             freehandMeter.reset();
+            fixedMeter.reset();
           }}
           disabled={!strokes.length}
         >
@@ -440,6 +455,23 @@ export function ComparePage() {
           render={(s) => freehandPath(s, freehand)}
           meter={freehandMeter}
           settings={<FreehandSettings options={freehand} onChange={setFreehand} />}
+        />
+        <Cell
+          title="rescrawl · fixed width"
+          note="fitted centerline nodes as one open path, stroked with round caps"
+          view={view}
+          pen={pen}
+          paths={fixedPaths}
+          render={(s) => fixedPath(s, fixed)}
+          meter={fixedMeter}
+          ink={{
+            fill: "none",
+            stroke: INK,
+            "stroke-width": fixed.width,
+            "stroke-linecap": "round",
+            "stroke-linejoin": "round",
+          }}
+          settings={<FixedSettings options={fixed} onChange={setFixed} />}
         />
       </div>
     </>

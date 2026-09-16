@@ -39,7 +39,7 @@ function measure(name: string, group: Point3[][]) {
     const r = renderStroke(pts);
     nodes += r.stages.nodes.length;
     contacts += r.outline.length;
-    const c = discCoverage({ centerline: r.stages.nodes, outline: r.outline });
+    const c = discCoverage(r.stages.nodes, r.outline);
     if (c.worst < worst) {
       worst = c.worst;
       at = group.length > 1 ? `${s}:${c.node}` : `#${c.node}`;

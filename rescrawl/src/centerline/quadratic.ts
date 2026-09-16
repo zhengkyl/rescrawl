@@ -1,113 +1,60 @@
+import type { CenterlineNode, FitOptions } from "./fit.ts";
+import { dist, lerp } from "../math.ts";
 import type { Point4 } from "../math.ts";
-import { chordRule, dist, lerp } from "../math.ts";
 
-// The segment between two nodes is a Hermite cubic from the first's out-tangent
-// (`ox`, `oy`, magnitude `mo`) to the second's in-tangent (`ix`, `iy`, `mi`).
-// Zero magnitudes at both ends read as a straight chord. In- and out-tangents
-// differ only at a corner. The radius runs as a Hermite too, with `slope`
-// (dr/ds) as its derivative.
-export type CenterlineNode = Point4 & {
-  ix: number;
-  iy: number;
-  ox: number;
-  oy: number;
-  mi: number;
-  mo: number;
-  slope: number; // dr/ds: how fast the radius grows along the stroke here
-};
-
-export type FitOptions = {
-  maxWidth?: number;
-  //
-  fitTol?: number; // ink the shape may gain where a sample is dropped, as a fraction of local r
-  fitCornerAngle?: number; // deg; a turn sharper than this over `fitWindow` is a corner
-  fitWindow?: number; // × maxWidth either side of a point that turn, tangent and radius slope are read over
-  fitHorizon?: number; // × maxWidth a segment may span before it commits regardless
-};
+// `fitCurve` with quadratic segments instead of cubic: the same samples, the
+// same tangents, corners and tube test, and one quadratic per segment where
+// `fitCurve` has a cubic. An experiment, copied rather than shared so the two
+// can be compared without moving each other.
+//
+// What that costs: a cubic on fixed end tangents still has two free
+// magnitudes to hug the samples with, and a quadratic has none -- the tangents
+// pin its control point. It also cannot inflect or turn 180 degrees. What it
+// buys: the nearest point on it has a closed form, where the cubic takes Newton.
 
 const DEG = Math.PI / 180;
 
 const MAX_RUN = 64;
-// Below this, the normal equations are treated as singular and the chord rule
-// stands in for the least-squares magnitudes.
-const SINGULAR = 1e-9;
-// A least-squares magnitude further than this factor from the chord rule is
-// taken as an artefact of too few samples, not a shape.
+// Tangents closer to parallel than this (as a cross product) never meet.
+const PARALLEL = 1e-9;
+// Legs longer than this many chords together are a near-parallel artefact,
+// not a shape.
 const MAG_RANGE = 3;
+// Hermite magnitudes of zero: a straight chord.
+const LINE: [number, number] = [0, 0];
 
-// Hermite basis and its first two derivatives at u.
-export function basis(u: number) {
-  const u2 = u * u;
-  const u3 = u2 * u;
-  return {
-    h00: 2 * u3 - 3 * u2 + 1,
-    h10: u3 - 2 * u2 + u,
-    h01: -2 * u3 + 3 * u2,
-    h11: u3 - u2,
-    d00: 6 * u2 - 6 * u,
-    d10: 3 * u2 - 4 * u + 1,
-    d01: -6 * u2 + 6 * u,
-    d11: 3 * u2 - 2 * u,
-    s00: 12 * u - 6,
-    s10: 6 * u - 4,
-    s01: -12 * u + 6,
-    s11: 6 * u - 2,
-  };
-}
-
-// Least-squares Hermite magnitudes, held within MAG_RANGE of the chord rule:
-// with one or two samples the system is barely determined and can return a
-// curve that loops between them.
-export function solveMagnitudes(
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-  tax: number,
-  tay: number,
-  tbx: number,
-  tby: number,
-  count: number,
-  at: (j: number) => { x: number; y: number },
-  u: (j: number) => number,
-): [number, number] {
-  let c11 = 0;
-  let c12 = 0;
-  let c22 = 0;
-  let x1 = 0;
-  let x2 = 0;
-  const tt = tax * tbx + tay * tby;
-  for (let j = 0; j < count; j++) {
-    const p = at(j);
-    const { h00, h10, h01, h11 } = basis(u(j));
-    // residual: the sample minus the position part of the Hermite; the two
-    // basis vectors are h10·ta and h11·tb
-    const rx = p.x - h00 * ax - h01 * bx;
-    const ry = p.y - h00 * ay - h01 * by;
-    c11 += h10 * h10;
-    c12 += h10 * h11 * tt;
-    c22 += h11 * h11;
-    x1 += h10 * (tax * rx + tay * ry);
-    x2 += h11 * (tbx * rx + tby * ry);
+// Real roots of a·t³ + b·t² + c·t + d, dropping to lower degree where the
+// leading coefficients vanish. Cardano, with the trigonometric form for three
+// real roots.
+function solveCubic(a: number, b: number, c: number, d: number): number[] {
+  const scale = Math.max(Math.abs(b), Math.abs(c), Math.abs(d));
+  if (Math.abs(a) <= 1e-12 * scale) {
+    if (Math.abs(b) <= 1e-12 * scale) return c === 0 ? [] : [-d / c];
+    const disc = c * c - 4 * b * d;
+    if (disc < 0) return [];
+    const s = Math.sqrt(disc);
+    return [(-c + s) / (2 * b), (-c - s) / (2 * b)];
   }
-  const det = c11 * c22 - c12 * c12;
-  let ma = -1;
-  let mb = -1;
-  if (Math.abs(det) > SINGULAR * Math.max(c11 * c22, 1e-300)) {
-    ma = (x1 * c22 - x2 * c12) / det;
-    mb = (c11 * x2 - c12 * x1) / det;
+  const B = b / a;
+  const C = c / a;
+  const Dd = d / a;
+  const p = C - (B * B) / 3;
+  const q = (2 * B * B * B) / 27 - (B * C) / 3 + Dd;
+  const shift = -B / 3;
+  const disc = (q * q) / 4 + (p * p * p) / 27;
+  if (disc > 0) {
+    const s = Math.sqrt(disc);
+    return [Math.cbrt(-q / 2 + s) + Math.cbrt(-q / 2 - s) + shift];
   }
-  const chord = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay));
-  const mc = chordRule(chord, tax, tay, tbx, tby);
-  if (
-    !(ma > mc / MAG_RANGE) ||
-    !(mb > mc / MAG_RANGE) ||
-    ma > mc * MAG_RANGE ||
-    mb > mc * MAG_RANGE
-  ) {
-    return [mc, mc];
-  }
-  return [ma, mb];
+  if (p === 0) return [shift];
+  const r = 2 * Math.sqrt(-p / 3);
+  const k = ((3 * q) / (2 * p)) * Math.sqrt(-3 / p);
+  const phi = Math.acos(k < -1 ? -1 : k > 1 ? 1 : k) / 3;
+  return [
+    r * Math.cos(phi) + shift,
+    r * Math.cos(phi - (2 * Math.PI) / 3) + shift,
+    r * Math.cos(phi - (4 * Math.PI) / 3) + shift,
+  ];
 }
 
 const single = (p: Point4): CenterlineNode => ({
@@ -121,7 +68,7 @@ const single = (p: Point4): CenterlineNode => ({
   slope: 0,
 });
 
-export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode[] {
+export function fitQuadratic(pts: Point4[], o: Required<FitOptions>): CenterlineNode[] {
   const n = pts.length;
   if (n === 0) return [];
   if (n === 1) return [single(pts[0])];
@@ -279,58 +226,73 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
     return gap > 0 && dx * dx + dy * dy <= gap * gap;
   };
 
-  // Magnitudes for ai..bi, or null if a sample between escapes the tube.
-  const cubicCovers = (ai: number, bi: number): [number, number] | null => {
+  // The one quadratic ai..bi on the stored tangents, or null if there is none
+  // or a sample between escapes the tube. Nothing is solved: with both end
+  // tangents fixed, the control point can only be where their lines meet.
+  // Returned as Hermite magnitudes -- a quadratic's end tangents are twice the
+  // legs to its control point -- so every consumer of nodes reads it unchanged.
+  const quadCovers = (ai: number, bi: number): [number, number] | null => {
     const a = pts[ai];
     const b = pts[bi];
     const tax = tout[2 * ai];
     const tay = tout[2 * ai + 1];
     const tbx = tin[2 * bi];
     const tby = tin[2 * bi + 1];
-    const span = S[bi] - S[ai];
-    const param = (j: number) => (span > 0 ? (S[ai + 1 + j] - S[ai]) / span : 0.5);
-    const [ma, mb] = solveMagnitudes(
-      a.x,
-      a.y,
-      b.x,
-      b.y,
-      tax,
-      tay,
-      tbx,
-      tby,
-      bi - ai - 1,
-      (j) => pts[ai + 1 + j],
-      param,
-    );
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const chord = Math.sqrt(dx * dx + dy * dy);
+    if (chord === 0) return null;
 
-    const px = ma * tax;
-    const py = ma * tay;
-    const qx = mb * tbx;
-    const qy = mb * tby;
+    // a + lam·ta = b - mu·tb. Both legs must run forwards: a negative one is an
+    // inflection, which no quadratic has.
+    let lam: number;
+    let mu: number;
+    const det = tax * tby - tay * tbx;
+    if (Math.abs(det) < PARALLEL) {
+      // Parallel tangents meet nowhere; only a straight run along them works.
+      if (tax * tbx + tay * tby < 0 || Math.abs(tax * dy - tay * dx) > PARALLEL * chord)
+        return null;
+      lam = mu = chord / 2;
+    } else {
+      lam = (dx * tby - dy * tbx) / det;
+      mu = (tax * dy - tay * dx) / det;
+      if (!(lam > 0 && mu > 0) || lam + mu > MAG_RANGE * chord) return null;
+    }
+
+    // P(t) = a + 2t·v + t²·w, with v = c - a and w = a - 2c + b.
+    const vx = lam * tax;
+    const vy = lam * tay;
+    const wx = dx - 2 * vx;
+    const wy = dy - 2 * vy;
+    const vv = vx * vx + vy * vy;
+    const vw = vx * wx + vy * wy;
+    const ww = wx * wx + wy * wy;
     for (let j = ai + 1; j < bi; j++) {
       const p = pts[j];
-      let u = param(j - ai - 1);
-      let ex = 0;
-      let ey = 0;
-      // Chord-length u overstates the distance; two Newton steps fix it.
-      for (let step = 0; step < 3; step++) {
-        const k = basis(u);
-        ex = k.h00 * a.x + k.h10 * px + k.h01 * b.x + k.h11 * qx - p.x;
-        ey = k.h00 * a.y + k.h10 * py + k.h01 * b.y + k.h11 * qy - p.y;
-        if (step === 2) break;
-        const dx = k.d00 * a.x + k.d10 * px + k.d01 * b.x + k.d11 * qx;
-        const dy = k.d00 * a.y + k.d10 * py + k.d01 * b.y + k.d11 * qy;
-        const sx = k.s00 * a.x + k.s10 * px + k.s01 * b.x + k.s11 * qx;
-        const sy = k.s00 * a.y + k.s10 * py + k.s01 * b.y + k.s11 * qy;
-        const f = ex * dx + ey * dy;
-        const df = dx * dx + dy * dy + ex * sx + ey * sy;
-        if (df <= 0) break;
-        u -= f / df;
-        u = u < 0 ? 0 : u > 1 ? 1 : u;
+      const e0x = a.x - p.x;
+      const e0y = a.y - p.y;
+      // Nearest point, exactly: (P - p)·P' = 0 is a cubic in t. Every real root
+      // in [0, 1] is a candidate, and so are both ends.
+      const roots = solveCubic(ww, 3 * vw, 2 * vv + e0x * wx + e0y * wy, e0x * vx + e0y * vy);
+      let u = 0;
+      let ex = e0x;
+      let ey = e0y;
+      let best = ex * ex + ey * ey;
+      for (const t of [...roots, 1]) {
+        if (!(t > 0 && t <= 1)) continue;
+        const cx = e0x + 2 * t * vx + t * t * wx;
+        const cy = e0y + 2 * t * vy + t * t * wy;
+        const d2 = cx * cx + cy * cy;
+        if (d2 < best) {
+          best = d2;
+          u = t;
+          ex = cx;
+          ey = cy;
+        }
       }
       if (!inTube(a, b, p, u, ex, ey)) return null;
     }
-    return [ma, mb];
+    return [2 * lam, 2 * mu];
   };
 
   // --- greedy extension, one run at a time ---
@@ -363,12 +325,12 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
     const hi = runs[k + 1];
     let a = lo;
     let i = lo + 1;
-
-    // A two-point segment has nothing between its ends, so it always fits.
-    let fit = cubicCovers(a, i)!;
+    // A two-point segment has nothing between its ends to escape the tube, but
+    // its tangents may still admit no quadratic; then it is the chord.
+    let fit = quadCovers(a, i) ?? LINE;
     while (i < hi) {
       if (i - a < MAX_RUN && S[i + 1] - S[a] <= o.fitHorizon * o.maxWidth) {
-        const m = cubicCovers(a, i + 1);
+        const m = quadCovers(a, i + 1);
         if (m) {
           fit = m;
           i++;
@@ -378,9 +340,8 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
       commit(i, fit);
       a = i;
       i = a + 1;
-      fit = cubicCovers(a, i)!;
+      fit = quadCovers(a, i) ?? LINE;
     }
-
     commit(hi, fit);
   }
 

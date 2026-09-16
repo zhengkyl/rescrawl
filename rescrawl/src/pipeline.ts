@@ -1,27 +1,54 @@
-import type { CenterlineNode, FitOptions } from "./centerline/fit.ts";
-import { dropContained } from "./centerline/simplify.ts";
-import { smoothPositions, type SmoothOptions } from "./centerline/smooth.ts";
-import { ENGINES, type OutlineEngine } from "./engine.ts";
+import { type CenterlineNode, fitCurve, type FitOptions } from "./centerline/fit.ts";
+import { fitQuadratic } from "./centerline/quadratic.ts";
+import { dropContained, smoothPositions, type SmoothOptions } from "./centerline/smooth.ts";
 import type { Point3, Point4 } from "./math.ts";
 import type { OutlineNode } from "./outline/contact.ts";
-import type { GreedyOptions } from "./outline/greedy.ts";
+import { type GreedyOptions, toOutlineGreedy } from "./outline/greedy.ts";
+import { type NodeFitOptions, toOutlineNodeFit } from "./outline/node-fit.ts";
+import { type NodeQuadOptions, toOutlineNodeQuad } from "./outline/node-quad.ts";
 import { toRadiiPointsFromRawSamples, type RadiusOptions } from "./thickness/radius.ts";
 
 //   raw       pointer samples as recorded
 //   radius    stage 1 -- a radius per point, from pen speed
 //   smoothed  stage 2 -- positions through a moving average
 //   distinct  stage 3 -- circles swallowed by a neighbour dropped
-//   nodes     stage 4 -- what the engine kept, and the outline around them
+//   nodes     stage 4 -- the fit: which discs survive, and the tangents through them
+//   outline   stage 5 -- the closed loop laid around them
+
+// Stage 4, the fit. To try a variant, write another
+// `(pts, o) => CenterlineNode[]` under `centerline/` and add it here; it is
+// then selectable everywhere a fit is named, against every outline below.
+// Copy an existing one rather than sharing its internals, so the two can be
+// compared without moving each other.
+export type FitKind = "cubic" | "quadratic";
+export const FITS: Record<FitKind, (pts: Point4[], o: Required<FitOptions>) => CenterlineNode[]> = {
+  cubic: fitCurve,
+  quadratic: fitQuadratic,
+};
+
+// Stage 5, the outline: where the contacts go on the envelope the nodes sweep.
+// Same deal -- one file each, copied rather than shared.
+export type OutlineKind = "greedy" | "node-fit" | "node-quad";
+export type OutlineOptions = GreedyOptions & NodeFitOptions & NodeQuadOptions;
+export const OUTLINES: Record<
+  OutlineKind,
+  (ns: CenterlineNode[], o: Required<OutlineOptions>) => OutlineNode[]
+> = {
+  greedy: toOutlineGreedy,
+  "node-fit": toOutlineNodeFit,
+  "node-quad": toOutlineNodeQuad,
+};
 
 // Every length is a multiple of `maxWidth` rather than a pixel count,
 // so a drawing scaled up with a pen scaled to match fits identically.
-export type RenderOptions = { engine?: OutlineEngine } & RadiusOptions &
+export type RenderOptions = { fit?: FitKind; outline?: OutlineKind } & RadiusOptions &
   SmoothOptions &
   FitOptions &
-  GreedyOptions;
+  OutlineOptions;
 
 export const RENDER_DEFAULTS: Required<RenderOptions> = {
-  engine: "greedy",
+  fit: "cubic",
+  outline: "greedy",
   minWidth: 1.5,
   maxWidth: 8,
   thinSpeed: 1,
@@ -33,6 +60,10 @@ export const RENDER_DEFAULTS: Required<RenderOptions> = {
   fitHorizon: 3,
   outlineTol: 0.03125,
   outlineHorizon: 3,
+  nodeTol: 0.03125,
+  nodeDepth: 6,
+  quadTol: 0.03125,
+  quadDepth: 6,
 };
 
 // The centerline as each stage left it, oldest first; the keys are in
@@ -41,33 +72,35 @@ export type CenterlineStages = {
   raw: Point3[];
   radius: Point4[]; // stage 1
   smoothed: Point4[]; // stage 2
-  distinct: Point4[]; // stage 3 -- what every engine starts from
+  distinct: Point4[]; // stage 3 -- what every fit starts from
 };
 
 export type StrokeStages = CenterlineStages & {
-  // stage 4 -- what the engine kept, carrying the tangents the outline was
-  // built on. Every engine runs `fitCurve`, so these are always `CenterlineNode`s.
-  nodes: CenterlineNode[];
+  nodes: CenterlineNode[]; // stage 4 -- what the fit kept, and the tangents there
 };
 
 export type StrokeRender = {
   stages: StrokeStages;
-  outline: OutlineNode[]; // stage 4 -- closed loop
+  outline: OutlineNode[]; // stage 5 -- closed loop
 };
 
 // Split out so a consumer that brings its own outline (the website's
-// perfect-freehand mode) can take the discs without running an engine.
-export function centerlineStages(stroke: Point3[], options: RenderOptions = {}): CenterlineStages {
+// perfect-freehand mode) can take the discs without fitting them.
+export function centerlineStages(points: Point3[], options: RenderOptions = {}): CenterlineStages {
   const o = { ...RENDER_DEFAULTS, ...options };
-  const radius = toRadiiPointsFromRawSamples(stroke, o);
+  const radius = toRadiiPointsFromRawSamples(points, o);
   const smoothed = smoothPositions(radius, o);
   const distinct = dropContained(smoothed);
-  return { raw: stroke, radius, smoothed, distinct };
+  return { raw: points, radius, smoothed, distinct };
 }
 
 export function renderStroke(stroke: Point3[], options: RenderOptions = {}): StrokeRender {
   const o = { ...RENDER_DEFAULTS, ...options };
   const stages = centerlineStages(stroke, o);
-  const { centerline: nodes, outline } = ENGINES[o.engine](stages.distinct, o);
-  return { stages: { ...stages, nodes }, outline };
+  // `node-fit` and `node-quad` build no corner: they need one tangent per node,
+  // so corner detection is off for them. The turn a corner is judged on lives
+  // in [0, PI], so a threshold past 180 degrees can never be met.
+  const fitOptions = o.outline === "greedy" ? o : { ...o, fitCornerAngle: 181 };
+  const nodes = FITS[o.fit](stages.distinct, fitOptions);
+  return { stages: { ...stages, nodes }, outline: OUTLINES[o.outline](nodes, o) };
 }

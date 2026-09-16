@@ -1,5 +1,4 @@
-import { basis, type CenterlineNode, fitCurve, type FitOptions } from "../centerline/fit.ts";
-import type { Shape } from "../engine.ts";
+import { basis, type CenterlineNode } from "../centerline/fit.ts";
 import { chordRule, clamp11, dist, type Point4, wrapPi } from "../math.ts";
 import { contactAt, discLoop, type OutlineNode, wrapZeroTau } from "./contact.ts";
 
@@ -14,7 +13,7 @@ import { contactAt, discLoop, type OutlineNode, wrapZeroTau } from "./contact.ts
 // it gets a cut and nonzero winding fills the fold.
 //
 // A variant should copy this file's envelope math rather than share it, so the
-// two can be compared without moving each other. See `engine.ts`.
+// two can be compared without moving each other. See `pipeline.ts`.
 
 export type GreedyOptions = {
   maxWidth?: number; // width at a standstill; the unit the lengths below are measured in
@@ -286,9 +285,4 @@ export function toOutlineGreedy(ns: CenterlineNode[], o: Required<GreedyOptions>
 
   // Contacts come out in loop order whichever way they were decided.
   return [...keep].sort((a, b) => a - b).map((i) => seq[i]);
-}
-
-export function greedyEngine(distinct: Point4[], o: Required<FitOptions & GreedyOptions>): Shape {
-  const nodes = fitCurve(distinct, o);
-  return { centerline: nodes, outline: toOutlineGreedy(nodes, o) };
 }

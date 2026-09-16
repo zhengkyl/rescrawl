@@ -170,9 +170,8 @@ function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
 // Debug overlay for one ink stroke. Each pipeline stage is its own circle layer:
 // the two stages before a radius exists are fixed-size dots, nested largest-first
 // so they don't hide each other, and every stage after draws each point at its
-// own radius — see DEBUG_STAGES for the order and colours. On top of those:
-// hollow circles at the final radii (what the outline is actually wrapped
-// around), the centerline curve, and a marker at every outline contact point.
+// own radius — see DEBUG_STAGES for the order and colours. On top of those, a
+// marker at every outline contact point.
 function drawDebug(
   stroke: Stroke,
   options: InkOptions,
@@ -180,32 +179,9 @@ function drawDebug(
   key: string | number,
   layers: DebugLayers,
 ) {
-  const { curve, outline, stages } = inkStages(stroke, options, t);
+  const { outline, stages } = inkStages(stroke, options, t);
   return (
     <g key={key}>
-      {layers.circles &&
-        stages.nodes.map((p, j) => (
-          <circle
-            key={`c${j}`}
-            cx={p.x}
-            cy={p.y}
-            r={p.r}
-            fill="none"
-            stroke="#3b82f6"
-            stroke-width="0.5"
-            stroke-opacity="0.5"
-            vector-effect="non-scaling-stroke"
-          />
-        ))}
-      {layers.centerline && (
-        <path
-          d={curve}
-          stroke="#3b82f6"
-          stroke-width="1"
-          fill="none"
-          vector-effect="non-scaling-stroke"
-        />
-      )}
       {DEBUG_STAGES.map(
         ({ key: k, color, dot }) =>
           layers[k] && (

@@ -1,4 +1,4 @@
-import type { Shape } from "../src/engine.ts";
+import type { CenterlineNode } from "../src/centerline/fit.ts";
 import { chordRule, dist, type Point3 } from "../src/math.ts";
 import type { OutlineNode } from "../src/outline/contact.ts";
 
@@ -10,13 +10,11 @@ export function outlinePolygon(cs: OutlineNode[], step = 0.25): { x: number; y: 
   for (let i = 0; i < cs.length; i++) {
     const a = cs[i];
     const b = cs[(i + 1) % cs.length];
-    const m = chordRule(dist(a, b), a.tx, a.ty, b.tx, b.ty);
-    const ka = (a.mOut ?? a.m ?? m) / 3;
-    const kb = (b.mIn ?? b.m ?? m) / 3;
-    const c1x = a.x + a.tx * ka;
-    const c1y = a.y + a.ty * ka;
-    const c2x = b.x - b.tx * kb;
-    const c2y = b.y - b.ty * kb;
+    const k = chordRule(dist(a, b), a.tx, a.ty, b.tx, b.ty) / 3;
+    const c1x = a.x + a.tx * k;
+    const c1y = a.y + a.ty * k;
+    const c2x = b.x - b.tx * k;
+    const c2y = b.y - b.ty * k;
     const n = Math.max(3, Math.ceil((dist(a, b) + 1) / step));
     for (let j = 0; j < n; j++) {
       const u = j / n;
@@ -46,11 +44,15 @@ export function contains(poly: { x: number; y: number }[], px: number, py: numbe
 }
 
 // Smallest fraction of any node's rim the outline contains. 1 is sound.
-export function discCoverage(shape: Shape, rim = 32): { worst: number; node: number } {
-  const poly = outlinePolygon(shape.outline);
+export function discCoverage(
+  nodes: CenterlineNode[],
+  outline: OutlineNode[],
+  rim = 32,
+): { worst: number; node: number } {
+  const poly = outlinePolygon(outline);
   let worst = 1;
   let node = -1;
-  shape.centerline.forEach((nd, i) => {
+  nodes.forEach((nd, i) => {
     let hit = 0;
     for (let k = 0; k < rim; k++) {
       const a = (2 * Math.PI * k) / rim;

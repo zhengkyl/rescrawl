@@ -3,21 +3,25 @@ import { RENDER_DEFAULTS, renderStroke } from "rescrawl";
 import { outlinePath } from "rescrawl/svg";
 import { GroupLabel, Slider } from "./controls";
 
-// rescrawl's own engine: the full pipeline (radius from speed, smoothing,
-// distinct discs, fit, greedy outline) with every knob it takes.
+// rescrawl's own pipeline in full (radius from speed, smoothing, distinct
+// discs, the cubic fit, the greedy outline) with every knob it takes.
 
 type Stroke = Point3[];
 
 export type GreedyOptions = Required<RenderOptions>;
 
-export const GREEDY_DEFAULTS: GreedyOptions = { ...RENDER_DEFAULTS, engine: "greedy" };
+export const GREEDY_DEFAULTS: GreedyOptions = {
+  ...RENDER_DEFAULTS,
+  fit: "cubic",
+  outline: "greedy",
+};
 
 export function greedyPath(stroke: Stroke, o: GreedyOptions): string {
   if (stroke.length === 0) return "";
   return outlinePath(renderStroke(stroke, o).outline);
 }
 
-// Numeric knobs only — `engine` is pinned to greedy on this canvas.
+// Numeric knobs only — the fit and the outline are pinned on this canvas.
 type NumberKey = {
   [K in keyof GreedyOptions]-?: GreedyOptions[K] extends number ? K : never;
 }[keyof GreedyOptions];

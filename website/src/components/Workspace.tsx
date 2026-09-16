@@ -7,7 +7,7 @@ import {
   getDefaultStrategies,
   INK_DEFAULTS,
   INK_STORAGE_KEY,
-  withKnownEngine,
+  withKnownModes,
 } from "../curves";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { usePlayhead } from "../hooks/usePlayhead";
@@ -32,7 +32,7 @@ export function Workspace() {
   const [strategies, setStrategies] = useState<StrategiesState>(getDefaultStrategies);
   const [debug, setDebug] = useState<DebugLayers>(DEBUG_DEFAULTS);
   const [inkOptions, setInkOptions] = useState<InkOptions>(() =>
-    withKnownEngine({
+    withKnownModes({
       ...INK_DEFAULTS,
       ...JSON.parse(localStorage.getItem(INK_STORAGE_KEY) || "{}"),
     }),
