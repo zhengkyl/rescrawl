@@ -9,7 +9,7 @@ import type {
   StrokeStages,
 } from "rescrawl";
 import { centerlineStages, RENDER_DEFAULTS, renderStroke } from "rescrawl";
-import { outlinePath, outlineQuadPath } from "rescrawl/svg";
+import { fitPath, outlinePath, outlineQuadPath } from "rescrawl/svg";
 import type { Stroke } from "./utils";
 import { elapsedPoints } from "./utils";
 
@@ -48,7 +48,10 @@ export type StrategiesState = Record<string, StrategyState>;
 // two of them on side by side is what shows you what that stage did. The rest
 // are derived geometry.
 export type StageKey = keyof StrokeStages;
-export type DebugLayers = Record<StageKey | "outline", boolean>;
+// Derived geometry, drawn from a stage rather than being one: what the fit
+// shaped (`centerline`, `handles`) and what was laid around it (`outline`).
+export type ExtraKey = "centerline" | "handles" | "outline";
+export type DebugLayers = Record<StageKey | ExtraKey, boolean>;
 
 // `dot` is a fixed marker size in px, and only `raw` carries no radius of its
 // own. From `radius` on, a stage draws each point at its own r: that circle is
@@ -64,11 +67,21 @@ export const DEBUG_STAGES: StageLayer[] = [
 ];
 
 export type ExtraLayer = {
-  key: "outline";
+  key: ExtraKey;
   label: string;
   color: string;
 };
+// Named, unlike the stage colours: the overlay draws these two as strokes and
+// markers rather than one circle per point, so the colour is needed at the
+// drawing site as well as on the toggle.
+export const CENTERLINE_COLOR = "#06b6d4";
+export const HANDLE_COLOR = "#ec4899";
+
+// In pipeline order, like the stages above: the fit's spine and the control
+// points it solved for, then the outline laid around them.
 export const DEBUG_EXTRAS: ExtraLayer[] = [
+  { key: "centerline", label: "4 · centerline nodes", color: CENTERLINE_COLOR },
+  { key: "handles", label: "4 · curve handles", color: HANDLE_COLOR },
   { key: "outline", label: "4 · outline pts", color: "#ef4444" },
 ];
 
@@ -144,8 +157,46 @@ export const DEBUG_DEFAULTS: DebugLayers = {
   smoothed: false,
   distinct: false,
   nodes: true,
+  centerline: false,
+  handles: false,
   outline: false,
 };
+
+// --- what the fit produced, for the two stage-4 overlay layers ---
+
+// The fitted centerline as path data: a line where the fit said line, a cubic on
+// the stored tangents where it said cubic. This is the spine the outline was
+// actually laid around, not a polyline through the nodes — so a segment the fit
+// got wrong shows up here as the wrong curve rather than as a plausible one.
+// More digits than the ink path bothers with, since this is read at whatever
+// zoom the fit is being inspected at.
+export const fitCurvePath = (ns: CenterlineNode[]): string => fitPath(ns, 3);
+
+// A corner node carries two tangents; at every other node the in- and
+// out-tangents are the same vector. Drawn differently, because a corner is where
+// the fit cut the run — the one node whose placement the outline wraps rather
+// than rounds.
+export const isCorner = (n: CenterlineNode): boolean => n.ix !== n.ox || n.iy !== n.oy;
+
+// The Bezier control points behind that spine, one pair per curved segment:
+// `fitPath` puts them a third of the way along each end's Hermite tangent, so a
+// handle's direction is the unit tangent the fit read and its length is the
+// magnitude the fit solved for. The straight-chord test is `fitPath`'s, so the
+// handles shown are exactly the ones the drawn curve used — a segment with no
+// handles is one the fit decided not to curve.
+export type CurveHandle = { x: number; y: number; cx: number; cy: number };
+
+export function curveHandles(ns: CenterlineNode[]): CurveHandle[] {
+  const out: CurveHandle[] = [];
+  for (let i = 1; i < ns.length; i++) {
+    const a = ns[i - 1];
+    const b = ns[i];
+    if (a.mo === 0 && b.mi === 0) continue;
+    out.push({ x: a.x, y: a.y, cx: a.x + (a.ox * a.mo) / 3, cy: a.y + (a.oy * a.mo) / 3 });
+    out.push({ x: b.x, y: b.y, cx: b.x - (b.ix * b.mi) / 3, cy: b.y - (b.iy * b.mi) / 3 });
+  }
+  return out;
+}
 
 const LINE_WIDTH = 2;
 const EMPTY: RenderedLine = { curve: "", width: LINE_WIDTH };

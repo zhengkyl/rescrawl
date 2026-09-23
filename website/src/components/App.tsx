@@ -1,14 +1,20 @@
 import type { ReadonlySignal, Signal } from "@preact/signals";
 import { computed, useSignal } from "@preact/signals";
 import { useEffect, useMemo, useRef } from "preact/hooks";
+import type { CenterlineNode } from "rescrawl";
 import { useApp } from "../context";
 import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from "../curves";
 import {
+  CENTERLINE_COLOR,
+  curveHandles,
   DEBUG_STAGES,
+  fitCurvePath,
   getActiveStrategies,
+  HANDLE_COLOR,
   hasRadiusLayer,
   INK_COLOR,
   inkStages,
+  isCorner,
   pickStagePoint,
   renderInk,
   strokeStages,
@@ -167,6 +173,69 @@ function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
   );
 }
 
+// The fit's own output, drawn as the fit shaped it: the spine through the nodes
+// plus a marker on each node. The two are one layer because neither reads alone
+// — a node's position only means something against the curve through it, and the
+// curve doesn't say where the fit chose to put a node. Corners are square, every
+// other node round. Markers are zero-length round/square-capped paths and the
+// spine is a non-scaling stroke, so both hold their size on screen at any zoom
+// while the geometry under them tracks the canvas.
+function CenterlineLayer({ nodes }: { nodes: CenterlineNode[] }) {
+  return (
+    <g>
+      <path
+        d={fitCurvePath(nodes)}
+        fill="none"
+        stroke={CENTERLINE_COLOR}
+        stroke-width="1.5"
+        vector-effect="non-scaling-stroke"
+      />
+      {nodes.map((n, j) => {
+        const corner = isCorner(n);
+        return (
+          <path
+            key={j}
+            d={`M${n.x} ${n.y}h0`}
+            stroke={CENTERLINE_COLOR}
+            stroke-width={corner ? 8 : 5}
+            stroke-linecap={corner ? "square" : "round"}
+            vector-effect="non-scaling-stroke"
+          />
+        );
+      })}
+    </g>
+  );
+}
+
+// Each curved segment's two control points, each tied back to the node it
+// belongs to — so a handle's direction is the tangent the fit read there and its
+// length is the magnitude it solved for. Reading these against the samples is
+// how a fit that tracks the ink is told from one that merely ends up in the
+// right places: an overlong handle bulges between two nodes that both sit right.
+function HandleLayer({ nodes }: { nodes: CenterlineNode[] }) {
+  return (
+    <g>
+      {curveHandles(nodes).map((h, j) => (
+        <g key={j}>
+          <path
+            d={`M${h.x} ${h.y}L${h.cx} ${h.cy}`}
+            stroke={HANDLE_COLOR}
+            stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
+          <path
+            d={`M${h.cx} ${h.cy}h0`}
+            stroke={HANDLE_COLOR}
+            stroke-width="4.5"
+            stroke-linecap="round"
+            vector-effect="non-scaling-stroke"
+          />
+        </g>
+      ))}
+    </g>
+  );
+}
+
 // Debug overlay for one ink stroke. Each pipeline stage is its own circle layer:
 // the two stages before a radius exists are fixed-size dots, nested largest-first
 // so they don't hide each other, and every stage after draws each point at its
@@ -201,6 +270,8 @@ function drawDebug(
             </g>
           ),
       )}
+      {layers.centerline && <CenterlineLayer nodes={stages.nodes} />}
+      {layers.handles && <HandleLayer nodes={stages.nodes} />}
       {layers.outline &&
         outline.map((p, j) => <circle key={`o${j}`} cx={p.x} cy={p.y} r="1.2" fill="#ef4444" />)}
     </g>
