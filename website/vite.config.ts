@@ -10,6 +10,7 @@ export default defineConfig({
       input: {
         main: fileURLToPath(new URL("index.html", import.meta.url)),
         compare: fileURLToPath(new URL("compare.html", import.meta.url)),
+        extend: fileURLToPath(new URL("extend.html", import.meta.url)),
       },
     },
   },
