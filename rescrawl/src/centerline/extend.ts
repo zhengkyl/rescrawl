@@ -1,6 +1,6 @@
 import { lerp, type Point2 } from "../math.ts";
 
-export function extendFit(points: Point2[]) {
+export function extendFit(points: Point2[], iterations = 3) {
   const n = points.length;
   if (n < 2) {
     // todo, proper shape
@@ -9,7 +9,6 @@ export function extendFit(points: Point2[]) {
 
   const cubics = [];
 
-  const MAX_DELTA = 2;
   const third = 1 / 3;
   // start as straight line
   let q0: Point2 = points[0];
@@ -18,26 +17,46 @@ export function extendFit(points: Point2[]) {
   let q1: Point2 = { x: lerp(q0.x, q3.x, third), y: lerp(q0.y, q3.y, third) };
   let q2: Point2 = { x: lerp(q0.x, q3.x, 2 * third), y: lerp(q0.y, q3.y, 2 * third) };
 
+  let curveStart = 1;
+
   for (let i = 2; i < points.length; i++) {
     const p = points[i];
 
-    // naive linear guess
-    // tangent = q3 + Q'(1)
-    // project p onto tangent
-    const dpx = p.x - q3.x;
-    const dpy = p.y - q3.y;
+    // closest point on existing curve
 
-    const qpx = 3 * (q3.x - q2.x);
-    const qpy = 3 * (q3.y - q2.y);
+    // convert to power basis
+    const Ax = q3.x - 3 * q2.x + 3 * q1.x - q0.x;
+    const Ay = q3.y - 3 * q2.y + 3 * q1.y - q0.y;
+    const Bx = 3 * (q2.x - 2 * q1.x + q0.x);
+    const By = 3 * (q2.y - 2 * q1.y + q0.y);
+    const Cx = 3 * (q1.x - q0.x);
+    const Cy = 3 * (q1.y - q0.y);
+    const Dx = q0.x;
+    const Dy = q0.y;
 
-    const dot = dpx * qpx + dpy * qpy;
-    const magn2 = qpx * qpx + qpy * qpy;
+    let a = 1;
+    for (let j = 0; j < iterations; j++) {
+      const a2 = a * a;
+      const a3 = a2 * a;
 
-    const delta = dot / magn2;
+      const qax = Ax * a3 + Bx * a2 + Cx * a + Dx;
+      const qay = Ay * a3 + By * a2 + Cy * a + Dy;
 
-    if (0 < delta && delta <= MAX_DELTA) {
-      const a = 1 + delta;
+      const qpax = 3 * Ax * a2 + 2 * Bx * a + Cx;
+      const qpay = 3 * Ay * a2 + 2 * By * a + Cy;
 
+      const qppax = 6 * Ax * a + 2 * Bx;
+      const qppay = 6 * Ay * a + 2 * By;
+
+      const fa = (qax - p.x) * qpax + (qay - p.y) * qpay;
+      const fpa = qpax * qpax + qpay * qpay + (qax - p.x) * qppax + (qay - p.y) * qppay;
+
+      a = a - fa / fpa;
+    }
+
+    // a should scale inverse to curve length
+    const maxA = 1 + 2 / (i - curveStart);
+    if (1 < a && a < maxA) {
       const ai = 1 - a;
       const ai2 = ai * ai;
       const ai3 = ai2 * ai;
@@ -62,7 +81,7 @@ export function extendFit(points: Point2[]) {
         continue;
       }
     }
-
+    curveStart = i;
     cubics.push([q0, q1, q2, q3]);
 
     const tx = q3.x - q2.x;

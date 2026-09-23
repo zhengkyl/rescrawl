@@ -37,6 +37,7 @@ export function ExtendPage() {
   const [showHandles, setShowHandles] = useState(true);
   const [showDropped, setShowDropped] = useState(false);
   const [minGap, setMinGap] = useState(1);
+  const [iterations, setIterations] = useState(3);
   const [view, setView] = useState({ x: 0, y: 0, zoom: 1 });
 
   const svgRef = useRef<SVGSVGElement>(null);
@@ -46,7 +47,10 @@ export function ExtendPage() {
   const drawing = useRef(false);
   const panning = useRef<{ x: number; y: number } | null>(null);
 
-  const cubics = useMemo(() => extendFit(points.slice(0, fed)), [points, fed]);
+  const cubics = useMemo(
+    () => extendFit(points.slice(0, fed), iterations),
+    [points, fed, iterations],
+  );
 
   const flat = cubics === null ? 0 : cubics.filter(isFlat).length;
   const broken = cubics === null ? 0 : cubics.filter((c) => !c.every(isFinitePoint)).length;
@@ -171,6 +175,22 @@ export function ExtendPage() {
             onInput={(e) => setMinGap(+(e.target as HTMLInputElement).value)}
           />
           <span class="num">{minGap}</span>
+        </label>
+
+        <label
+          class="knob"
+          title="Newton iterations for the closest point on the curve. 0 leaves a at 1, so nothing ever extends."
+        >
+          newton
+          <input
+            type="range"
+            min={0}
+            max={10}
+            step={1}
+            value={iterations}
+            onInput={(e) => setIterations(+(e.target as HTMLInputElement).value)}
+          />
+          <span class="num">{iterations}</span>
         </label>
 
         <label class="check">
