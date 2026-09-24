@@ -74,6 +74,13 @@ export function ExtendPage() {
     return { kept, dropped: fed - survived };
   }, [cubics, points, fed]);
 
+  // Everything needed to replay this frame outside the page: the fed prefix at
+  // full precision, the knob that changes the fit, and what came back.
+  function copyData() {
+    const data = { iterations, points: points.slice(0, fed), cubics };
+    navigator.clipboard.writeText(JSON.stringify(data));
+  }
+
   function commit(next: Point2[]) {
     liveRef.current = next;
     setPoints(next);
@@ -224,6 +231,13 @@ export function ExtendPage() {
 
         <span class="spacer" />
 
+        <button
+          onClick={copyData}
+          disabled={fed === 0}
+          title="copy the fed points, newton iterations and output cubics as JSON"
+        >
+          copy
+        </button>
         <button onClick={() => commit(liveRef.current.slice(0, -1))} disabled={points.length === 0}>
           undo
         </button>

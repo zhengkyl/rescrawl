@@ -20,6 +20,10 @@ export function extendFit(points: Point2[], iterations = 3) {
   let us = [1];
   let nextUs: number[] = [];
 
+  const LOCK = 4; // points to lock start/prev tangent
+  let prev: [Point2, Point2, Point2, Point2] | null = null;
+  let prevW = 0;
+
   for (let i = 2; i < points.length; i++) {
     const p = points[i];
 
@@ -76,7 +80,7 @@ export function extendFit(points: Point2[], iterations = 3) {
       const diffX = p.x - e3x;
       const diffY = p.y - e3y;
 
-      if (diffX * diffX + diffY * diffY < 2 * 2) {
+      if (diffX * diffX + diffY * diffY < 0.8 * 0.8) {
         const s = 1 / a;
         let b1sq = 0;
         let b2sq = 0;
@@ -104,7 +108,32 @@ export function extendFit(points: Point2[], iterations = 3) {
 
         let alpha;
         let beta;
-        if (us.length < 2) {
+
+        if (prev) {
+          const k =
+            Math.hypot(e1x - q0.x, e1y - q0.y) / Math.hypot(q0.x - prev[2].x, q0.y - prev[2].y);
+          let gamma;
+          if (prevW === 0 && us.length < 2) {
+            // neither side has an interior point: min-norm
+            const nn = k * k * b1sq + b2sq;
+            gamma = (k * b1b3) / nn;
+            beta = -b2b3 / nn;
+          } else {
+            const m11 = k * k * b1sq + prevW;
+            const m12 = -k * b1b2;
+            const r1 = k * b1b3;
+            const r2 = -b2b3;
+            const det = m11 * b2sq - m12 * m12;
+            gamma = (r1 * b2sq - m12 * r2) / det;
+            beta = (m11 * r2 - m12 * r1) / det;
+          }
+          alpha = -k * gamma;
+          prev[2] = { x: prev[2].x + gamma * diffX, y: prev[2].y + gamma * diffY };
+        } else if (cubics.length > 0) {
+          // joint tangent is locked: q1 stays put
+          alpha = 0;
+          beta = -b2b3 / b2sq;
+        } else if (us.length < 2) {
           alpha = -b1b3 / (b1sq + b2sq);
           beta = -b2b3 / (b1sq + b2sq);
         } else {
@@ -119,10 +148,22 @@ export function extendFit(points: Point2[], iterations = 3) {
 
         us = nextUs;
         nextUs = [];
+
+        if (prev && us.length >= LOCK) {
+          cubics.push(prev);
+          prev = null;
+        }
+
         continue;
       }
     }
-    cubics.push([q0, q1, q2, q3]);
+    if (prev) cubics.push(prev);
+    prev = [q0, q1, q2, q3];
+    prevW = 0;
+    for (const u of us) {
+      const b2 = 3 * u * u * (1 - u);
+      prevW += b2 * b2;
+    }
     us = [1];
 
     const tx = q3.x - q2.x;
@@ -139,6 +180,7 @@ export function extendFit(points: Point2[], iterations = 3) {
     q3 = p;
   }
 
+  if (prev) cubics.push(prev);
   cubics.push([q0, q1, q2, q3]);
 
   return cubics;
