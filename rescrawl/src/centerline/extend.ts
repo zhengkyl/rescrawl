@@ -17,7 +17,8 @@ export function extendFit(points: Point2[], iterations = 3) {
   let q1: Point2 = { x: lerp(q0.x, q3.x, third), y: lerp(q0.y, q3.y, third) };
   let q2: Point2 = { x: lerp(q0.x, q3.x, 2 * third), y: lerp(q0.y, q3.y, 2 * third) };
 
-  let curveStart = 1;
+  let us = [1];
+  let nextUs: number[] = [];
 
   for (let i = 2; i < points.length; i++) {
     const p = points[i];
@@ -55,7 +56,7 @@ export function extendFit(points: Point2[], iterations = 3) {
     }
 
     // a should scale inverse to curve length
-    const maxA = 1 + 2 / (i - curveStart);
+    const maxA = 1 + 2 / us.length;
     if (1 < a && a < maxA) {
       const ai = 1 - a;
       const ai2 = ai * ai;
@@ -72,17 +73,57 @@ export function extendFit(points: Point2[], iterations = 3) {
       const e3x = ai3 * q0.x + 3 * ai2 * a * q1.x + 3 * ai * a2 * q2.x + a3 * q3.x;
       const e3y = ai3 * q0.y + 3 * ai2 * a * q1.y + 3 * ai * a2 * q2.y + a3 * q3.y;
 
-      const diffX = e3x - p.x;
-      const diffY = e3y - p.y;
+      const diffX = p.x - e3x;
+      const diffY = p.y - e3y;
+
       if (diffX * diffX + diffY * diffY < 2 * 2) {
-        q1 = { x: e1x, y: e1y };
-        q2 = { x: e2x, y: e2y };
-        q3 = { x: e3x, y: e3y };
+        const s = 1 / a;
+        let b1sq = 0;
+        let b2sq = 0;
+        let b1b2 = 0;
+        let b1b3 = 0;
+        let b2b3 = 0;
+        for (const u of us) {
+          const nu = u * s;
+
+          nextUs.push(nu);
+
+          const nu2 = nu * nu;
+          const nui = 1 - nu;
+          const b1 = 3 * nu * nui * nui;
+          const b2 = 3 * nu2 * nui;
+          const b3 = nu2 * nu;
+
+          b1sq += b1 * b1;
+          b2sq += b2 * b2;
+          b1b2 += b1 * b2;
+          b1b3 += b1 * b3;
+          b2b3 += b2 * b3;
+        }
+        nextUs.push(1);
+
+        let alpha;
+        let beta;
+        if (us.length < 2) {
+          alpha = -b1b3 / (b1sq + b2sq);
+          beta = -b2b3 / (b1sq + b2sq);
+        } else {
+          const det = b1sq * b2sq - b1b2 * b1b2;
+          alpha = (-b1b3 * b2sq + b2b3 * b1b2) / det;
+          beta = (b1sq * -b2b3 + b1b2 * b1b3) / det;
+        }
+
+        q1 = { x: e1x + alpha * diffX, y: e1y + alpha * diffY };
+        q2 = { x: e2x + beta * diffX, y: e2y + beta * diffY };
+        q3 = p;
+
+        us = nextUs;
+        nextUs = [];
         continue;
       }
     }
-    curveStart = i;
     cubics.push([q0, q1, q2, q3]);
+    us = [1];
 
     const tx = q3.x - q2.x;
     const ty = q3.y - q2.y;
