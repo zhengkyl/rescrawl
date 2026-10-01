@@ -29,28 +29,6 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // samples become nodes, and those numbers at each.
 //
 // ---------------------------------------------------------------------------
-// STEP 2 -- smooth through every sample
-//
-// Give each node a tangent: the unit vector from pts[i - 1] to pts[i + 1]. At
-// the two ends only one neighbour exists; use the one chord there is. In and
-// out are the same vector.
-//
-// Then each segment a -> b gets a length at both ends:
-//
-//   a.mo = b.mi = chordRule(dist(a, b), a.ox, a.oy, b.ix, b.iy)
-//
-// The chord rule is the length that makes a cubic between two unit tangents
-// trace a circular arc; for parallel tangents it is just the chord.
-//
-// On the bench: a smooth curve through every green dot, handles showing. This
-// is nearly Catmull-Rom -- compare "catmull-rom" at spacing 0.
-//
-// THE KEY IDEA of the whole fit is already here: tangents are decided at every
-// sample BEFORE deciding which samples to keep. Whatever gets dropped later,
-// the curve stays tangent-continuous at every node, and fitting one segment
-// leaves only two unknowns -- its two lengths.
-//
-// ---------------------------------------------------------------------------
 // STEP 3 -- tangents from a distance along the stroke, not from neighbours
 //
 // Pen jitter makes pts[i - 1] and pts[i + 1] mostly noise, and how far apart
@@ -190,15 +168,35 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
   const tangents = [];
   for (let i = 0; i < n; i++) {
     const prev = pts[Math.max(i - 1, 0)];
+    const curr = pts[i];
     const next = pts[Math.min(i + 1, n - 1)];
-    const dx = next.x - prev.x;
-    const dy = next.y - prev.y;
-    const magn = Math.sqrt(dx * dx + dy * dy);
 
-    if (magn === 0) {
+    const ax = curr.x - prev.x;
+    const ay = curr.y - prev.y;
+    const aMagn = Math.sqrt(ax * ax + ay * ay);
+
+    const bx = next.x - curr.x;
+    const by = next.y - curr.y;
+    const bMagn = Math.sqrt(bx * bx + by * by);
+
+    if (aMagn === 0) {
+      tangents.push({ x: bx / bMagn, y: by / bMagn });
+      continue;
+    }
+    if (bMagn === 0) {
+      tangents.push({ x: ax / aMagn, y: ay / aMagn });
+      continue;
+    }
+
+    const tx = (bMagn / aMagn) * ax + (aMagn / bMagn) * bx;
+    const ty = (bMagn / aMagn) * ay + (aMagn / bMagn) * by;
+    const tMagn = Math.sqrt(tx * tx + ty * ty);
+
+    if (tMagn === 0) {
+      // (prev === next) !== curr
       tangents.push({ x: 1, y: 0 });
     } else {
-      tangents.push({ x: dx / magn, y: dy / magn });
+      tangents.push({ x: tx / tMagn, y: ty / tMagn });
     }
   }
 
