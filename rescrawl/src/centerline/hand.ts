@@ -1,4 +1,4 @@
-import { chordRule, dist, type Point4 } from "../math.ts";
+import { chordRule, type Point4 } from "../math.ts";
 import type { CenterlineNode, FitOptions } from "./fit.ts";
 
 // `fitCurve`, rebuilt by hand one idea at a time. Pick "hand" on the
@@ -27,26 +27,6 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // so mo = mi = 0 is a straight chord. The lengths are Hermite tangent
 // lengths; a Bezier handle is a third of one. That is the whole output: which
 // samples become nodes, and those numbers at each.
-//
-// ---------------------------------------------------------------------------
-// STEP 3 -- tangents from a distance along the stroke, not from neighbours
-//
-// Pen jitter makes pts[i - 1] and pts[i + 1] mostly noise, and how far apart
-// they are depends on pen speed. Read the direction over a fixed distance D
-// instead:
-//
-//   S[i] = arc length to sample i      (S[0] = 0, S[i] = S[i-1] + dist)
-//   D    = o.fitWindow * o.maxWidth    (6px at defaults)
-//
-//   back = the point on the polyline at arc length S[i] - D
-//   fwd  = the point on the polyline at arc length S[i] + D
-//   tangent = normalize(fwd - back)
-//
-// "The point at arc length s": find the two samples whose S straddle s and
-// lerp between them. Clamp to the first / last sample off either end.
-//
-// On the bench: handles stop wobbling. Drag "window" and watch the tangents
-// stiffen. fit.ts: `armBack`, `armFwd`, `secant`.
 //
 // ---------------------------------------------------------------------------
 // STEP 4 -- drop samples: the greedy walk
@@ -162,29 +142,57 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // changes how much is recomputed, never what comes out. Leave it for last.
 
 export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[] {
-  void o;
   const n = pts.length;
+  if (n === 0) return [];
 
-  const tangents = [];
+  const s = [0];
+  const x = [0];
+  const y = [0];
+  {
+    let total = 0;
+    let totalX = 0;
+    let totalY = 0;
+    let prev = pts[0];
+    let curr;
+    for (let i = 1; i < n; i++) {
+      curr = pts[i];
+      const dx = curr.x - prev.x;
+      const dy = curr.y - prev.y;
+      totalX += dx;
+      totalY += dy;
+      total += Math.sqrt(dx * dx + dy * dy);
+      x.push(totalX);
+      y.push(totalY);
+      s.push(total);
+
+      prev = curr;
+    }
+  }
+
+  const t = [];
   for (let i = 0; i < n; i++) {
-    const prev = pts[Math.max(i - 1, 0)];
-    const curr = pts[i];
-    const next = pts[Math.min(i + 1, n - 1)];
+    const prev = Math.max(i - 1, 0);
+    const curr = i;
+    const next = Math.min(i + 1, n - 1);
 
-    const ax = curr.x - prev.x;
-    const ay = curr.y - prev.y;
-    const aMagn = Math.sqrt(ax * ax + ay * ay);
+    const ax = x[curr] - x[prev];
+    const ay = y[curr] - y[prev];
+    const aMagn = s[curr] - s[prev];
 
-    const bx = next.x - curr.x;
-    const by = next.y - curr.y;
-    const bMagn = Math.sqrt(bx * bx + by * by);
+    const bx = x[next] - x[curr];
+    const by = y[next] - y[curr];
+    const bMagn = s[next] - s[curr];
 
     if (aMagn === 0) {
-      tangents.push({ x: bx / bMagn, y: by / bMagn });
+      if (bMagn === 0) {
+        t.push({ x: 1, y: 0 });
+        continue;
+      }
+      t.push({ x: bx / bMagn, y: by / bMagn });
       continue;
     }
     if (bMagn === 0) {
-      tangents.push({ x: ax / aMagn, y: ay / aMagn });
+      t.push({ x: ax / aMagn, y: ay / aMagn });
       continue;
     }
 
@@ -193,42 +201,86 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
     const tMagn = Math.sqrt(tx * tx + ty * ty);
 
     if (tMagn === 0) {
-      // (prev === next) !== curr
-      tangents.push({ x: 1, y: 0 });
+      t.push({ x: 1, y: 0 });
     } else {
-      tangents.push({ x: tx / tMagn, y: ty / tMagn });
+      t.push({ x: tx / tMagn, y: ty / tMagn });
     }
   }
 
-  const out: CenterlineNode[] = [];
-  for (let i = 0; i < n; i++) {
-    const curr = pts[i];
-    const t = tangents[i];
-
-    out.push({
-      x: curr.x,
-      y: curr.y,
-      t: curr.t,
-      r: curr.r,
-      ix: t.x,
-      iy: t.y,
-      ox: t.x,
-      oy: t.y,
+  const out: CenterlineNode[] = [
+    {
+      ...pts[0],
+      ix: t[0].x,
+      iy: t[0].y,
+      ox: t[0].x,
+      oy: t[0].y,
       mi: 0,
       mo: 0,
       slope: 0,
+    },
+  ];
+
+  const fitWidth = o.fitTol * o.maxWidth;
+
+  let a = 0;
+  while (a < n - 1) {
+    let m!: number;
+
+    let b = a + 1;
+    while (b < n) {
+      const arc = s[b] - s[a];
+      if (arc === 0) continue;
+
+      const dx = x[b] - x[a];
+      const dy = y[b] - y[a];
+      const chord = Math.sqrt(dx * dx + dy * dy);
+      const bM = chordRule(chord, t[a].x, t[a].y, t[b].x, t[b].y);
+      let fits = true;
+
+      const tax = t[a].x * bM;
+      const tay = t[a].y * bM;
+      const tbx = t[b].x * bM;
+      const tby = t[b].y * bM;
+
+      for (let j = a + 1; j < b; j++) {
+        const u = (s[j] - s[a]) / arc;
+
+        const u2 = u * u;
+        const u3 = u2 * u;
+        const h00 = 2 * u3 - 3 * u2 + 1;
+        const h10 = u3 - 2 * u2 + u;
+        const h01 = -2 * u3 + 3 * u2;
+        const h11 = u3 - u2;
+
+        const pux = h00 * x[a] + h10 * tax + h01 * x[b] + h11 * tbx;
+        const puy = h00 * y[a] + h10 * tay + h01 * y[b] + h11 * tby;
+
+        const gapx = pux - x[j];
+        const gapy = puy - y[j];
+        if (gapx * gapx + gapy * gapy > fitWidth * fitWidth) {
+          fits = false;
+          break;
+        }
+      }
+      if (!fits) break;
+      m = bM;
+      b++;
+    }
+    b--;
+
+    out[out.length - 1].mo = m;
+    out.push({
+      ...pts[b],
+      ix: t[b].x,
+      iy: t[b].y,
+      ox: t[b].x,
+      oy: t[b].y,
+      mi: m,
+      mo: 0,
+      slope: 0,
     });
-  }
 
-  for (let i = 0; i < n - 1; i++) {
-    const curr = pts[i];
-    const next = pts[i + 1];
-    const t = tangents[i];
-    const tNext = tangents[i + 1];
-    const m = chordRule(dist(curr, next), t.x, t.y, tNext.x, tNext.y);
-
-    out[i].mo = m;
-    out[i + 1].mi = m;
+    a = b;
   }
 
   return out;
