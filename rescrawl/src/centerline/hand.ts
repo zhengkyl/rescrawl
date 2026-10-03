@@ -29,36 +29,6 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // samples become nodes, and those numbers at each.
 //
 // ---------------------------------------------------------------------------
-// STEP 4 -- drop samples: the greedy walk
-//
-// Now keep a sample only when it is needed. Starting from node a, try to end
-// the segment at b = a + 1, a + 2, ... and keep going while the cubic a -> b
-// (step 2's lengths) passes near every sample between. When b + 1 fails, end
-// the segment at b, make b the new a, and go again.
-//
-// "Passes near", for now: for each sample j strictly between a and b,
-//
-//   u = (S[j] - S[a]) / (S[b] - S[a])     how far along, by arc length
-//   d = distance from pts[j] to the cubic at u
-//   pass if d <= 0.5px
-//
-// Two more ways a segment stops growing:
-//   S[b + 1] - S[a] > o.fitHorizon * o.maxWidth -- while drawing, the segment
-//     still open at the pen is the only ink that moves, so it is kept short
-//   b - a >= 64 -- a cap on the work per segment
-//
-// Segment a -> a + 1 has nothing between its ends, so it always passes.
-//
-// On the bench: far fewer segments. Each try checks every sample between, so
-// a segment of L samples costs ~L^2/2 checks -- that is the search, and the
-// horizon is what bounds it. fit.ts: the "greedy extension" loop.
-//
-// To evaluate the cubic at u you need the Hermite basis:
-//   h00 = 2u^3 - 3u^2 + 1     h10 = u^3 - 2u^2 + u
-//   h01 = -2u^3 + 3u^2        h11 = u^3 - u^2
-//   P(u) = h00·a + h10·(a.mo · ta) + h01·b + h11·(b.mi · tb)
-//
-// ---------------------------------------------------------------------------
 // STEP 5 -- fit the two lengths instead of guessing them
 //
 // The chord rule never looks at the samples. With both tangents fixed, P(u)
@@ -224,24 +194,22 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
 
   let a = 0;
   while (a < n - 1) {
-    let m!: number;
+    let mo = 0;
+    let mi = 0;
 
     let b = a + 1;
     while (b < n) {
       const arc = s[b] - s[a];
-      if (arc === 0) continue;
+      if (arc === 0) {
+        b++;
+        continue;
+      }
 
-      const dx = x[b] - x[a];
-      const dy = y[b] - y[a];
-      const chord = Math.sqrt(dx * dx + dy * dy);
-      const bM = chordRule(chord, t[a].x, t[a].y, t[b].x, t[b].y);
-      let fits = true;
-
-      const tax = t[a].x * bM;
-      const tay = t[a].y * bM;
-      const tbx = t[b].x * bM;
-      const tby = t[b].y * bM;
-
+      let A = 0;
+      let B = 0;
+      let C = 0;
+      let E = 0;
+      let F = 0;
       for (let j = a + 1; j < b; j++) {
         const u = (s[j] - s[a]) / arc;
 
@@ -252,8 +220,50 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
         const h01 = -2 * u3 + 3 * u2;
         const h11 = u3 - u2;
 
-        const pux = h00 * x[a] + h10 * tax + h01 * x[b] + h11 * tbx;
-        const puy = h00 * y[a] + h10 * tay + h01 * y[b] + h11 * tby;
+        const rjX = x[j] - h00 * x[a] - h01 * x[b];
+        const rjY = y[j] - h00 * y[a] - h01 * y[b];
+
+        A += h10 * h10;
+        B += h10 * h11 * (t[a].x * t[b].x + t[a].y * t[b].y);
+        C += h11 * h11;
+        E += h10 * (t[a].x * rjX + t[a].y * rjY);
+        F += h11 * (t[b].x * rjX + t[b].y * rjY);
+      }
+
+      const dx = x[b] - x[a];
+      const dy = y[b] - y[a];
+      const chord = Math.sqrt(dx * dx + dy * dy);
+      const mc = chordRule(chord, t[a].x, t[a].y, t[b].x, t[b].y);
+
+      const lower = mc / 3;
+      const upper = mc * 3;
+
+      const det = A * C - B * B;
+      let ma = (E * C - B * F) / det;
+      let mb = (A * F - B * E) / det;
+
+      if (det === 0 || ma < lower || mb < lower || ma > upper || mb > upper) {
+        ma = mb = mc;
+      }
+
+      const taX = t[a].x * ma;
+      const taY = t[a].y * ma;
+      const tbX = t[b].x * mb;
+      const tbY = t[b].y * mb;
+
+      let fits = true;
+      for (let j = a + 1; j < b; j++) {
+        const u = (s[j] - s[a]) / arc;
+
+        const u2 = u * u;
+        const u3 = u2 * u;
+        const h00 = 2 * u3 - 3 * u2 + 1;
+        const h10 = u3 - 2 * u2 + u;
+        const h01 = -2 * u3 + 3 * u2;
+        const h11 = u3 - u2;
+
+        const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
+        const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
 
         const gapx = pux - x[j];
         const gapy = puy - y[j];
@@ -263,19 +273,20 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
         }
       }
       if (!fits) break;
-      m = bM;
+      mo = ma;
+      mi = mb;
       b++;
     }
     b--;
 
-    out[out.length - 1].mo = m;
+    out[out.length - 1].mo = mo;
     out.push({
       ...pts[b],
       ix: t[b].x,
       iy: t[b].y,
       ox: t[b].x,
       oy: t[b].y,
-      mi: m,
+      mi: mi,
       mo: 0,
       slope: 0,
     });
