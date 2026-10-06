@@ -29,29 +29,6 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // samples become nodes, and those numbers at each.
 //
 // ---------------------------------------------------------------------------
-// STEP 5 -- fit the two lengths instead of guessing them
-//
-// The chord rule never looks at the samples. With both tangents fixed, P(u)
-// is linear in the two lengths ma (at a) and mb (at b):
-//
-//   P(u) = h00·a + h01·b + ma·h10·ta + mb·h11·tb
-//
-// so least squares is a 2x2 solve. With rj = pts[j] - h00·a - h01·b (the
-// part the lengths have to explain), minimising sum |rj - ma·h10·ta -
-// mb·h11·tb|^2 gives
-//
-//   [ sum h10^2            sum h10·h11·(ta·tb) ] [ma]   [ sum h10·(ta·rj) ]
-//   [ sum h10·h11·(ta·tb)  sum h11^2           ] [mb] = [ sum h11·(tb·rj) ]
-//
-// with u for each sample from arc length, as in step 4. Solve by Cramer's
-// rule. Fall back to the chord rule when the determinant is ~0 (0 or 1
-// samples between), or when either length comes out negative or more than 3x
-// the chord rule -- too few samples to trust, and the cubic would loop.
-//
-// On the bench: segments get longer at the same tolerance, and the two
-// handles of a segment differ in length. fit.ts: `solveMagnitudes`.
-//
-// ---------------------------------------------------------------------------
 // STEP 6 -- measure the real distance, and measure it in ink
 //
 // (a) The arc-length u is a guess, not the nearest point on the curve, so the
@@ -111,7 +88,12 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // That is all of `fitCurve` except the incremental cache (`FitCache`), which
 // changes how much is recomputed, never what comes out. Leave it for last.
 
-export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[] {
+// `reparam`: rounds of "move each sample's u to the nearest point, then solve
+// again" after the first solve. 0 is one solve at the arc-length guesses.
+export function fitHand(
+  pts: Point4[],
+  o: Required<FitOptions> & { reparam: number },
+): CenterlineNode[] {
   const n = pts.length;
   if (n === 0) return [];
 
@@ -210,8 +192,12 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
       let C = 0;
       let E = 0;
       let F = 0;
+
+      const us: number[] = [];
+
       for (let j = a + 1; j < b; j++) {
         const u = (s[j] - s[a]) / arc;
+        us.push(u);
 
         const u2 = u * u;
         const u3 = u2 * u;
@@ -234,26 +220,90 @@ export function fitHand(pts: Point4[], o: Required<FitOptions>): CenterlineNode[
       const dy = y[b] - y[a];
       const chord = Math.sqrt(dx * dx + dy * dy);
       const mc = chordRule(chord, t[a].x, t[a].y, t[b].x, t[b].y);
-
       const lower = mc / 3;
       const upper = mc * 3;
 
-      const det = A * C - B * B;
-      let ma = (E * C - B * F) / det;
-      let mb = (A * F - B * E) / det;
+      let ma!: number;
+      let mb!: number;
 
-      if (det === 0 || ma < lower || mb < lower || ma > upper || mb > upper) {
-        ma = mb = mc;
+      let taX!: number;
+      let taY!: number;
+      let tbX!: number;
+      let tbY!: number;
+
+      const newtonIterations = o.reparam;
+      for (let i = 0; i <= newtonIterations; i++) {
+        const det = A * C - B * B;
+        ma = (E * C - B * F) / det;
+        mb = (A * F - B * E) / det;
+        if (det === 0 || ma < lower || mb < lower || ma > upper || mb > upper) {
+          ma = mb = mc;
+        }
+
+        taX = t[a].x * ma;
+        taY = t[a].y * ma;
+        tbX = t[b].x * mb;
+        tbY = t[b].y * mb;
+
+        A = 0;
+        B = 0;
+        C = 0;
+        E = 0;
+        F = 0;
+
+        for (let j = a + 1; j < b; j++) {
+          const u = us[j - a - 1];
+
+          const u2 = u * u;
+          const u3 = u2 * u;
+          const h00 = 2 * u3 - 3 * u2 + 1;
+          const h10 = u3 - 2 * u2 + u;
+          const h01 = -2 * u3 + 3 * u2;
+          const h11 = u3 - u2;
+
+          // calculate tangent for next newton iteration
+          const rjX = x[j] - h00 * x[a] - h01 * x[b];
+          const rjY = y[j] - h00 * y[a] - h01 * y[b];
+          A += h10 * h10;
+          B += h10 * h11 * (t[a].x * t[b].x + t[a].y * t[b].y);
+          C += h11 * h11;
+          E += h10 * (t[a].x * rjX + t[a].y * rjY);
+          F += h11 * (t[b].x * rjX + t[b].y * rjY);
+          //
+
+          const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
+          const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
+
+          const gapx = pux - x[j];
+          const gapy = puy - y[j];
+
+          const hp00 = 6 * u2 - 6 * u;
+          const hp10 = 3 * u2 - 4 * u + 1;
+          const hp01 = -6 * u2 + 6 * u;
+          const hp11 = 3 * u2 - 2 * u;
+
+          const ppux = hp00 * x[a] + hp10 * taX + hp01 * x[b] + hp11 * tbX;
+          const ppuy = hp00 * y[a] + hp10 * taY + hp01 * y[b] + hp11 * tbY;
+
+          const hpp00 = 12 * u - 6;
+          const hpp10 = 6 * u - 4;
+          const hpp01 = -12 * u + 6;
+          const hpp11 = 6 * u - 2;
+
+          const pppux = hpp00 * x[a] + hpp10 * taX + hpp01 * x[b] + hpp11 * tbX;
+          const pppuy = hpp00 * y[a] + hpp10 * taY + hpp01 * y[b] + hpp11 * tbY;
+
+          const f = gapx * ppux + gapy * ppuy;
+          const fp = ppux * ppux + ppuy * ppuy + gapx * pppux + gapy * pppuy;
+
+          if (fp <= 0) continue; // fp is second derivative, > 0 means upward parabola aka min, otherwise no good
+          us[j - a - 1] = Math.max(0, Math.min(u - f / fp, 1));
+        }
       }
-
-      const taX = t[a].x * ma;
-      const taY = t[a].y * ma;
-      const tbX = t[b].x * mb;
-      const tbY = t[b].y * mb;
 
       let fits = true;
       for (let j = a + 1; j < b; j++) {
-        const u = (s[j] - s[a]) / arc;
+        const u = us[j - a - 1];
 
         const u2 = u * u;
         const u3 = u2 * u;
