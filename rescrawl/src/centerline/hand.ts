@@ -187,35 +187,6 @@ export function fitHand(
         continue;
       }
 
-      let A = 0;
-      let B = 0;
-      let C = 0;
-      let E = 0;
-      let F = 0;
-
-      const us: number[] = [];
-
-      for (let j = a + 1; j < b; j++) {
-        const u = (s[j] - s[a]) / arc;
-        us.push(u);
-
-        const u2 = u * u;
-        const u3 = u2 * u;
-        const h00 = 2 * u3 - 3 * u2 + 1;
-        const h10 = u3 - 2 * u2 + u;
-        const h01 = -2 * u3 + 3 * u2;
-        const h11 = u3 - u2;
-
-        const rjX = x[j] - h00 * x[a] - h01 * x[b];
-        const rjY = y[j] - h00 * y[a] - h01 * y[b];
-
-        A += h10 * h10;
-        B += h10 * h11 * (t[a].x * t[b].x + t[a].y * t[b].y);
-        C += h11 * h11;
-        E += h10 * (t[a].x * rjX + t[a].y * rjY);
-        F += h11 * (t[b].x * rjX + t[b].y * rjY);
-      }
-
       const dx = x[b] - x[a];
       const dy = y[b] - y[a];
       const chord = Math.sqrt(dx * dx + dy * dy);
@@ -231,8 +202,36 @@ export function fitHand(
       let tbX!: number;
       let tbY!: number;
 
+      const us: number[] = [];
+      for (let j = a + 1; j < b; j++) {
+        us.push((s[j] - s[a]) / arc);
+      }
+
       const newtonIterations = o.reparam;
       for (let i = 0; i <= newtonIterations; i++) {
+        let A = 0;
+        let B = 0;
+        let C = 0;
+        let E = 0;
+        let F = 0;
+        for (let j = a + 1; j < b; j++) {
+          const u = us[j - a - 1];
+
+          const u2 = u * u;
+          const u3 = u2 * u;
+          const h00 = 2 * u3 - 3 * u2 + 1;
+          const h10 = u3 - 2 * u2 + u;
+          const h01 = -2 * u3 + 3 * u2;
+          const h11 = u3 - u2;
+
+          const rjX = x[j] - h00 * x[a] - h01 * x[b];
+          const rjY = y[j] - h00 * y[a] - h01 * y[b];
+          A += h10 * h10;
+          B += h10 * h11 * (t[a].x * t[b].x + t[a].y * t[b].y);
+          C += h11 * h11;
+          E += h10 * (t[a].x * rjX + t[a].y * rjY);
+          F += h11 * (t[b].x * rjX + t[b].y * rjY);
+        }
         const det = A * C - B * B;
         ma = (E * C - B * F) / det;
         mb = (A * F - B * E) / det;
@@ -245,12 +244,6 @@ export function fitHand(
         tbX = t[b].x * mb;
         tbY = t[b].y * mb;
 
-        A = 0;
-        B = 0;
-        C = 0;
-        E = 0;
-        F = 0;
-
         for (let j = a + 1; j < b; j++) {
           const u = us[j - a - 1];
 
@@ -260,16 +253,6 @@ export function fitHand(
           const h10 = u3 - 2 * u2 + u;
           const h01 = -2 * u3 + 3 * u2;
           const h11 = u3 - u2;
-
-          // calculate tangent for next newton iteration
-          const rjX = x[j] - h00 * x[a] - h01 * x[b];
-          const rjY = y[j] - h00 * y[a] - h01 * y[b];
-          A += h10 * h10;
-          B += h10 * h11 * (t[a].x * t[b].x + t[a].y * t[b].y);
-          C += h11 * h11;
-          E += h10 * (t[a].x * rjX + t[a].y * rjY);
-          F += h11 * (t[b].x * rjX + t[b].y * rjY);
-          //
 
           const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
           const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
