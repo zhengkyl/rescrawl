@@ -207,6 +207,7 @@ export function fitHand(
         us.push((s[j] - s[a]) / arc);
       }
 
+      let fits = true;
       const newtonIterations = o.reparam;
       for (let i = 0; i <= newtonIterations; i++) {
         let A = 0;
@@ -235,8 +236,30 @@ export function fitHand(
         const det = A * C - B * B;
         ma = (E * C - B * F) / det;
         mb = (A * F - B * E) / det;
+
         if (det === 0 || ma < lower || mb < lower || ma > upper || mb > upper) {
-          ma = mb = mc;
+          const err = (m1: number, m2: number) =>
+            A * m1 * m1 + 2 * B * m1 * m2 + C * m2 * m2 - 2 * E * m1 - 2 * F * m2;
+          let bestErr = err(mc, mc);
+          let bestA = mc;
+          let bestB = mc;
+          const update = (m1: number, m2: number) => {
+            m1 = clamp(m1, lower, upper);
+            m2 = clamp(m2, lower, upper);
+            const err1 = err(m1, m2);
+            if (err1 < bestErr) {
+              bestA = m1;
+              bestB = m2;
+              bestErr = err1;
+            }
+          };
+
+          update(lower, (F - B * lower) / C);
+          update(upper, (F - B * upper) / C);
+          update((E - B * lower) / A, lower);
+          update((E - B * upper) / A, upper);
+          ma = bestA;
+          mb = bestB;
         }
 
         taX = t[a].x * ma;
@@ -244,6 +267,7 @@ export function fitHand(
         tbX = t[b].x * mb;
         tbY = t[b].y * mb;
 
+        fits = true;
         for (let j = a + 1; j < b; j++) {
           const u = us[j - a - 1];
 
@@ -279,32 +303,37 @@ export function fitHand(
           const f = gapx * ppux + gapy * ppuy;
           const fp = ppux * ppux + ppuy * ppuy + gapx * pppux + gapy * pppuy;
 
-          if (fp <= 0) continue; // fp is second derivative, > 0 means upward parabola aka min, otherwise no good
-          us[j - a - 1] = Math.max(0, Math.min(u - f / fp, 1));
+          // fp is second derivative, > 0 means upward parabola aka min, otherwise no good
+          if (fp > 0) {
+            us[j - a - 1] = Math.max(0, Math.min(u - f / fp, 1));
+          }
+
+          {
+            const u = us[j - a - 1];
+            const u2 = u * u;
+            const u3 = u2 * u;
+            const h00 = 2 * u3 - 3 * u2 + 1;
+            const h10 = u3 - 2 * u2 + u;
+            const h01 = -2 * u3 + 3 * u2;
+            const h11 = u3 - u2;
+
+            const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
+            const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
+
+            const gapx = pux - x[j];
+            const gapy = puy - y[j];
+
+            if (gapx * gapx + gapy * gapy > fitWidth * fitWidth) {
+              fits = false;
+            }
+          }
         }
-      }
 
-      let fits = true;
-      for (let j = a + 1; j < b; j++) {
-        const u = us[j - a - 1];
-
-        const u2 = u * u;
-        const u3 = u2 * u;
-        const h00 = 2 * u3 - 3 * u2 + 1;
-        const h10 = u3 - 2 * u2 + u;
-        const h01 = -2 * u3 + 3 * u2;
-        const h11 = u3 - u2;
-
-        const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
-        const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
-
-        const gapx = pux - x[j];
-        const gapy = puy - y[j];
-        if (gapx * gapx + gapy * gapy > fitWidth * fitWidth) {
-          fits = false;
+        if (fits) {
           break;
         }
       }
+
       if (!fits) break;
       mo = ma;
       mi = mb;
@@ -328,4 +357,8 @@ export function fitHand(
   }
 
   return out;
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(v, hi));
 }
