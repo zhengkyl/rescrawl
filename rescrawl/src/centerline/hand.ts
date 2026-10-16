@@ -1,21 +1,6 @@
 import { chordRule, type Point4 } from "../math.ts";
 import type { CenterlineNode, FitOptions } from "./fit.ts";
 
-// `fitCurve`, rebuilt by hand one idea at a time. Pick "hand" on the
-// centerline bench (/centerline.html) and every save shows up there, next to
-// the real "cubic" to compare against.
-//
-// Every step below is a complete fit on its own. Do them in order: each one
-// changes one thing, says why, and says what should change on screen. Where
-// fit.ts already does it, the step names the part to peek at. Helpers you may
-// want are in ../math.ts: `dist`, `lerp`, `chordRule`.
-//
-// ---------------------------------------------------------------------------
-// THE OUTPUT
-//
-// A CenterlineNode is a kept sample (its x, y, r, t) plus what the curve does
-// there:
-//
 //   (ix, iy)  unit tangent arriving      (ox, oy)  unit tangent leaving
 //   mi        length arriving            mo        length leaving
 //   slope     dr/ds -- only the outline reads it; leave 0 until step 8
@@ -27,69 +12,6 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // so mo = mi = 0 is a straight chord. The lengths are Hermite tangent
 // lengths; a Bezier handle is a third of one. That is the whole output: which
 // samples become nodes, and those numbers at each.
-//
-// ---------------------------------------------------------------------------
-// STEP 6 -- measure the real distance, and measure it in ink
-//
-// (a) The arc-length u is a guess, not the nearest point on the curve, so the
-//     distance it gives is too large and good segments get rejected. Refine u
-//     with Newton on f(u) = (P(u) - p) · P'(u):
-//
-//       u <- u - f / f',   f' = P'·P' + (P - p)·P''
-//
-//     Two steps from the guess is enough. Clamp u to [0, 1]. You need the
-//     basis derivatives: differentiate the four h's above, twice.
-//
-// (b) Swap the fixed 0.5px for what dropping a sample does to the ink. The
-//     ink is the union of every sample's disc. The segment sweeps a tube of
-//     radius lerp(a.r, b.r, u). Sample j's disc stays inside the tube when
-//     d + pj.r <= tube radius; allow fitTol of its own radius as slack:
-//
-//       gap = lerp(a.r, b.r, u) - pj.r + o.fitTol * pj.r
-//       pass if gap > 0 and d <= gap
-//
-// On the bench: switch "discs" on -- every dropped disc sits inside the tube
-// of the segment that skipped it. Drag "tol". fit.ts: `cubicCovers`, `inTube`.
-//
-// ---------------------------------------------------------------------------
-// STEP 7 -- corners
-//
-// A smooth tangent across a sharp turn rounds it off; the greedy walk then
-// spends many nodes hugging the rounding and still cuts the corner.
-//
-//   angle[i] = the turn between (pts[i] - back) and (fwd - pts[i]), with
-//              step 3's arms: atan2(|cross|, dot)
-//   corner   = angle[i] > o.fitCornerAngle degrees, and the largest angle
-//              within D either side (a sharp turn reads sharp over several
-//              samples; keep one)
-//
-// Corners cut the stroke into runs. Inside a run, clamp every arm to the run:
-// back cannot reach before its start, fwd cannot pass its end. At a corner the
-// in-tangent comes from the run it ends and the out-tangent from the run it
-// starts, so (ix, iy) != (ox, oy) there -- the only place they differ. Walk
-// each run separately: the greedy never crosses a corner, and the corner is
-// always a node.
-//
-// On the bench: draw a V. Set corner to 181 (off), then back to 60. fit.ts:
-// the "corners" section, `secant`, the runs loop. (fit.ts also prefers a
-// retrace's turnaround sample among equals -- `turns` and `rank`. Skip it
-// unless you draw back-and-forth strokes.)
-//
-// ---------------------------------------------------------------------------
-// STEP 8 -- slope, for the outline
-//
-//   slope[i] = (r at fwd - r at back) / (S at fwd - S at back)
-//
-// using step 3's arms, NOT clamped at corners -- the radius does not care
-// about direction. Nothing on the bench changes; the outline stage uses it to
-// tilt the envelope where the pen speeds up or slows down.
-//
-// ---------------------------------------------------------------------------
-// That is all of `fitCurve` except the incremental cache (`FitCache`), which
-// changes how much is recomputed, never what comes out. Leave it for last.
-
-// `reparam`: rounds of "move each sample's u to the nearest point, then solve
-// again" after the first solve. 0 is one solve at the arc-length guesses.
 export function fitHand(
   pts: Point4[],
   o: Required<FitOptions> & { reparam: number },
@@ -123,9 +45,12 @@ export function fitHand(
 
   const t = [];
   for (let i = 0; i < n; i++) {
-    const prev = Math.max(i - 1, 0);
+    // repeated samples break tangents (e.g. pointerup)
     const curr = i;
-    const next = Math.min(i + 1, n - 1);
+    let prev = i;
+    while (prev > 0 && s[prev] === s[curr]) prev--;
+    let next = i;
+    while (next < n - 1 && s[next] === s[curr]) next++;
 
     const ax = x[curr] - x[prev];
     const ay = y[curr] - y[prev];
@@ -174,13 +99,15 @@ export function fitHand(
 
   const fitWidth = o.fitTol * o.maxWidth;
 
+  const end = n - 1;
+
   let a = 0;
-  while (a < n - 1) {
+  while (a < end) {
     let mo = 0;
     let mi = 0;
 
     let b = a + 1;
-    while (b < n) {
+    while (b <= end) {
       const arc = s[b] - s[a];
       if (arc === 0) {
         b++;
@@ -189,10 +116,22 @@ export function fitHand(
 
       const dx = x[b] - x[a];
       const dy = y[b] - y[a];
-      const chord = Math.sqrt(dx * dx + dy * dy);
-      const mc = chordRule(chord, t[a].x, t[a].y, t[b].x, t[b].y);
-      const lower = mc / 3;
-      const upper = mc * 3;
+      const chordLength = Math.sqrt(dx * dx + dy * dy);
+      if (chordLength === 0) break;
+
+      const mc = chordRule(chordLength, t[a].x, t[a].y, t[b].x, t[b].y);
+
+      const chordDirX = dx / chordLength;
+      const chordDirY = dy / chordLength;
+
+      const ca = t[a].x * chordDirX + t[a].y * chordDirY;
+      const cb = t[b].x * chordDirX + t[b].y * chordDirY;
+
+      // must accept 2 point case
+      // an end tangent pointing backwards along the chord leaves the triangle empty
+      if (b > a + 1 && (ca <= 0 || cb <= 0)) {
+        break;
+      }
 
       let ma!: number;
       let mb!: number;
@@ -237,27 +176,53 @@ export function fitHand(
         ma = (E * C - B * F) / det;
         mb = (A * F - B * E) / det;
 
-        if (det === 0 || ma < lower || mb < lower || ma > upper || mb > upper) {
+        const alpha = 0.5;
+        const lower = alpha * chordLength;
+        const twoUpper = (3 - alpha) * chordLength;
+
+        // projection on chord
+        const maca = ma * ca;
+        const mbcb = mb * cb;
+        if (det === 0 || maca < lower || mbcb < lower || maca + mbcb > twoUpper) {
           const err = (m1: number, m2: number) =>
             A * m1 * m1 + 2 * B * m1 * m2 + C * m2 * m2 - 2 * E * m1 - 2 * F * m2;
-          let bestErr = err(mc, mc);
+
+          // where the hypotenuse meets each leg: the other projection is already at lower
+          const upper = twoUpper - lower;
+          const corners = [
+            [lower / ca, lower / cb],
+            [upper / ca, lower / cb],
+            [lower / ca, upper / cb],
+          ];
+          // any arbitrary point inside triangle
+          // but mc has stable velocity?
           let bestA = mc;
           let bestB = mc;
-          const update = (m1: number, m2: number) => {
-            m1 = clamp(m1, lower, upper);
-            m2 = clamp(m2, lower, upper);
+          let bestErr = err(bestA, bestB);
+
+          for (let k = 0; k < 3; k++) {
+            const [pa, pb] = corners[k];
+            const [qa, qb] = corners[(k + 1) % 3];
+            const da = qa - pa;
+            const db = qb - pb;
+
+            const h = A * da * da + 2 * B * da * db + C * db * db;
+            const g = (A * pa + B * pb - E) * da + (B * pa + C * pb - F) * db;
+
+            // err(s) = err(P) + 2g * s + h * s^2
+            // -g/h is root
+            const step = h > 0 ? clamp(-g / h, 0, 1) : g < 0 ? 1 : 0;
+
+            const m1 = pa + step * da;
+            const m2 = pb + step * db;
+
             const err1 = err(m1, m2);
             if (err1 < bestErr) {
               bestA = m1;
               bestB = m2;
               bestErr = err1;
             }
-          };
-
-          update(lower, (F - B * lower) / C);
-          update(upper, (F - B * upper) / C);
-          update((E - B * lower) / A, lower);
-          update((E - B * upper) / A, upper);
+          }
           ma = bestA;
           mb = bestB;
         }
