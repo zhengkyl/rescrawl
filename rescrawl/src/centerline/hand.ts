@@ -12,6 +12,14 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 // so mo = mi = 0 is a straight chord. The lengths are Hermite tangent
 // lengths; a Bezier handle is a third of one. That is the whole output: which
 // samples become nodes, and those numbers at each.
+//
+// thoughts
+// b/c tangent at point n changes when n + 1 point is available
+// segments are not "closed" until 2 points after end
+// at any time, a segment can lose its last point
+// and closed segments can reopen within one "frame"
+//
+//
 export function fitHand(
   pts: Point4[],
   o: Required<FitOptions> & { reparam: number },
@@ -121,15 +129,22 @@ export function fitHand(
 
       const mc = chordRule(chordLength, t[a].x, t[a].y, t[b].x, t[b].y);
 
+      const twoPoints = b === a + 1 || s[b - 1] === s[a];
+      if (twoPoints) {
+        mo = mc;
+        mi = mc;
+        b++;
+        continue;
+      }
+
       const chordDirX = dx / chordLength;
       const chordDirY = dy / chordLength;
 
       const ca = t[a].x * chordDirX + t[a].y * chordDirY;
       const cb = t[b].x * chordDirX + t[b].y * chordDirY;
 
-      // must accept 2 point case
       // an end tangent pointing backwards along the chord leaves the triangle empty
-      if (b > a + 1 && (ca <= 0 || cb <= 0)) {
+      if (ca <= 0 || cb <= 0) {
         break;
       }
 
@@ -194,11 +209,9 @@ export function fitHand(
             [upper / ca, lower / cb],
             [lower / ca, upper / cb],
           ];
-          // any arbitrary point inside triangle
-          // but mc has stable velocity?
-          let bestA = mc;
-          let bestB = mc;
-          let bestErr = err(bestA, bestB);
+          let bestA = NaN;
+          let bestB = NaN;
+          let bestErr = Infinity;
 
           for (let k = 0; k < 3; k++) {
             const [pa, pb] = corners[k];
