@@ -22,7 +22,7 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 //
 export function fitHand(
   rawPts: Point4[],
-  o: Required<FitOptions> & { reparam: number },
+  o: Required<FitOptions> & { reparam: number; open: boolean },
 ): CenterlineNode[] {
   if (rawPts.length === 0) return [];
 
@@ -114,7 +114,8 @@ export function fitHand(
 
   const fitWidth = o.fitTol * o.maxWidth;
 
-  const end = n - 1;
+  const held = o.open && n > 2;
+  const end = held ? n - 2 : n - 1;
 
   let a = 0;
   while (a < end) {
@@ -335,6 +336,24 @@ export function fitHand(
     });
 
     a = b;
+  }
+
+  if (held) {
+    const tip = n - 1;
+    const dx = x[tip] - x[end];
+    const dy = y[tip] - y[end];
+    const m = chordRule(Math.sqrt(dx * dx + dy * dy), t[end].x, t[end].y, t[tip].x, t[tip].y);
+    out[out.length - 1].mo = m;
+    out.push({
+      ...pts[tip],
+      ix: t[tip].x,
+      iy: t[tip].y,
+      ox: t[tip].x,
+      oy: t[tip].y,
+      mi: m,
+      mo: 0,
+      slope: 0,
+    });
   }
 
   return out;
