@@ -64,7 +64,7 @@ export function fitHand(
     }
   }
 
-  const t = [];
+  const t: { x: number; y: number }[] = [];
   for (let i = 0; i < n; i++) {
     const curr = i;
     const prev = i > 0 ? i - 1 : 0;
@@ -141,17 +141,6 @@ export function fitHand(
         continue;
       }
 
-      const chordDirX = dx / chordLength;
-      const chordDirY = dy / chordLength;
-
-      const ca = t[a].x * chordDirX + t[a].y * chordDirY;
-      const cb = t[b].x * chordDirX + t[b].y * chordDirY;
-
-      // an end tangent pointing backwards along the chord leaves the triangle empty
-      if (ca <= 0 || cb <= 0) {
-        break;
-      }
-
       let ma!: number;
       let mb!: number;
 
@@ -195,53 +184,37 @@ export function fitHand(
         ma = (E * C - B * F) / det;
         mb = (A * F - B * E) / det;
 
-        const alpha = 0.5;
-        const lower = alpha * chordLength;
-        const twoUpper = (3 - alpha) * chordLength;
+        // ratio between slowest and fastest speed
+        const alpha = 0.6;
 
-        // projection on chord
-        const maca = ma * ca;
-        const mbcb = mb * cb;
-        if (det === 0 || maca < lower || mbcb < lower || maca + mbcb > twoUpper) {
-          const err = (m1: number, m2: number) =>
-            A * m1 * m1 + 2 * B * m1 * m2 + C * m2 * m2 - 2 * E * m1 - 2 * F * m2;
+        const stalls = (m1: number, m2: number) =>
+          m1 <= 0 ||
+          m2 <= 0 ||
+          speedRatio(dx, dy, t[a].x * m1, t[a].y * m1, t[b].x * m2, t[b].y * m2) < alpha * alpha;
 
-          // where the hypotenuse meets each leg: the other projection is already at lower
-          const upper = twoUpper - lower;
-          const corners = [
-            [lower / ca, lower / cb],
-            [upper / ca, lower / cb],
-            [lower / ca, upper / cb],
-          ];
-          let bestA = NaN;
-          let bestB = NaN;
-          let bestErr = Infinity;
-
-          for (let k = 0; k < 3; k++) {
-            const [pa, pb] = corners[k];
-            const [qa, qb] = corners[(k + 1) % 3];
-            const da = qa - pa;
-            const db = qb - pb;
-
-            const h = A * da * da + 2 * B * da * db + C * db * db;
-            const g = (A * pa + B * pb - E) * da + (B * pa + C * pb - F) * db;
-
-            // err(s) = err(P) + 2g * s + h * s^2
-            // -g/h is root
-            const step = h > 0 ? clamp(-g / h, 0, 1) : g < 0 ? 1 : 0;
-
-            const m1 = pa + step * da;
-            const m2 = pb + step * db;
-
-            const err1 = err(m1, m2);
-            if (err1 < bestErr) {
-              bestA = m1;
-              bestB = m2;
-              bestErr = err1;
-            }
+        if (det === 0 || stalls(ma, mb)) {
+          // when does this stall?
+          if (stalls(mc, mc)) {
+            fits = false;
+            break;
           }
-          ma = bestA;
-          mb = bestB;
+          if (det === 0) {
+            ma = mc;
+            mb = mc;
+          } else {
+            let lo = 0;
+            let hi = 1;
+            for (let k = 0; k < 6; k++) {
+              const mid = (lo + hi) / 2;
+              if (stalls(ma + mid * (mc - ma), mb + mid * (mc - mb))) {
+                lo = mid;
+              } else {
+                hi = mid;
+              }
+            }
+            ma += hi * (mc - ma);
+            mb += hi * (mc - mb);
+          }
         }
 
         taX = t[a].x * ma;
@@ -359,6 +332,73 @@ export function fitHand(
   return out;
 }
 
-function clamp(v: number, lo: number, hi: number) {
-  return Math.max(lo, Math.min(v, hi));
+function speedRatio(dx: number, dy: number, t0x: number, t0y: number, t1x: number, t1y: number) {
+  // P'(u)
+  const c0x = t0x;
+  const c0y = t0y;
+  const c1x = -4 * t0x - 2 * t1x + 6 * dx;
+  const c1y = -4 * t0y - 2 * t1y + 6 * dy;
+  const c2x = 3 * t0x + 3 * t1x - 6 * dx;
+  const c2y = 3 * t0y + 3 * t1y - 6 * dy;
+
+  // (P' . P')' / 2 = k3 u^3 + k2 u^2 + k1 u + k0
+  const k0 = c0x * c1x + c0y * c1y;
+  const k1 = c1x * c1x + c1y * c1y + 2 * (c0x * c2x + c0y * c2y);
+  const k2 = 3 * (c1x * c2x + c1y * c2y);
+  const k3 = 2 * (c2x * c2x + c2y * c2y);
+
+  // find roots
+  // 3 k3 u^2 + 2 k2 u + k1
+  // -2 k2 +- sqrt(4 k2^2 - 12 k3 k1) / 6 k3
+  // -k2 +- sqrt(k2^2 - 3 k3 k1) / 3 k3
+
+  const fenceposts = [0];
+  if (k3 > 0) {
+    const discrim = k2 * k2 - 3 * k3 * k1;
+    if (discrim > 0) {
+      const root = Math.sqrt(discrim);
+      const r1 = (-k2 - root) / (3 * k3);
+      const r2 = (-k2 + root) / (3 * k3);
+      if (r1 > 0 && r1 < 1) fenceposts.push(r1);
+      if (r2 > 0 && r2 < 1) fenceposts.push(r2);
+    }
+  }
+  fenceposts.push(1);
+
+  const startV2 = c0x * c0x + c0y * c0y;
+  const endX = c0x + c1x + c2x;
+  const endY = c0y + c1y + c2y;
+  const endV2 = endX * endX + endY * endY;
+
+  let lo = Math.min(startV2, endV2);
+  let hi = Math.max(startV2, endV2);
+
+  for (let i = 1; i < fenceposts.length; i++) {
+    let u0 = fenceposts[i - 1];
+    let u1 = fenceposts[i];
+
+    let f0 = k0 + u0 * (k1 + u0 * (k2 + u0 * k3));
+    const f1 = k0 + u1 * (k1 + u1 * (k2 + u1 * k3));
+
+    if (f0 * f1 > 0) continue;
+
+    for (let k = 0; k < 14; k++) {
+      const mid = (u0 + u1) / 2;
+      const fm = k0 + mid * (k1 + mid * (k2 + mid * k3));
+      if (f0 * fm <= 0) {
+        u1 = mid;
+      } else {
+        u0 = mid;
+        f0 = fm;
+      }
+    }
+
+    const u = (u0 + u1) / 2;
+    const vx = c0x + u * (c1x + u * c2x);
+    const vy = c0y + u * (c1y + u * c2y);
+    const speed = vx * vx + vy * vy;
+    if (speed < lo) lo = speed;
+    if (speed > hi) hi = speed;
+  }
+  return lo / hi;
 }
