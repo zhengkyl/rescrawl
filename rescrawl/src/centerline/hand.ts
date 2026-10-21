@@ -21,11 +21,24 @@ import type { CenterlineNode, FitOptions } from "./fit.ts";
 //
 //
 export function fitHand(
-  pts: Point4[],
+  rawPts: Point4[],
   o: Required<FitOptions> & { reparam: number },
 ): CenterlineNode[] {
+  if (rawPts.length === 0) return [];
+
+  const pts = [rawPts[0]];
+  for (let i = 1; i < rawPts.length; i++) {
+    const prev = rawPts[i - 1];
+    const curr = rawPts[i];
+    if (curr.x !== prev.x || curr.y !== prev.y) {
+      pts.push(curr);
+    }
+  }
+
   const n = pts.length;
-  if (n === 0) return [];
+  if (n === 1) {
+    return [{ ...pts[0], ix: 1, iy: 0, ox: 1, oy: 0, mi: 0, mo: 0, slope: 0 }];
+  }
 
   const s = [0];
   const x = [0];
@@ -53,12 +66,9 @@ export function fitHand(
 
   const t = [];
   for (let i = 0; i < n; i++) {
-    // repeated samples break tangents (e.g. pointerup)
     const curr = i;
-    let prev = i;
-    while (prev > 0 && s[prev] === s[curr]) prev--;
-    let next = i;
-    while (next < n - 1 && s[next] === s[curr]) next++;
+    const prev = i > 0 ? i - 1 : 0;
+    const next = i < n - 1 ? i + 1 : n - 1;
 
     const ax = x[curr] - x[prev];
     const ay = y[curr] - y[prev];
@@ -68,15 +78,11 @@ export function fitHand(
     const by = y[next] - y[curr];
     const bMagn = s[next] - s[curr];
 
-    if (aMagn === 0) {
-      if (bMagn === 0) {
-        t.push({ x: 1, y: 0 });
-        continue;
-      }
+    if (i === 0) {
       t.push({ x: bx / bMagn, y: by / bMagn });
       continue;
     }
-    if (bMagn === 0) {
+    if (i === n - 1) {
       t.push({ x: ax / aMagn, y: ay / aMagn });
       continue;
     }
@@ -86,10 +92,11 @@ export function fitHand(
     const tMagn = Math.sqrt(tx * tx + ty * ty);
 
     if (tMagn === 0) {
-      t.push({ x: 1, y: 0 });
-    } else {
-      t.push({ x: tx / tMagn, y: ty / tMagn });
+      t.push({ x: bx / bMagn, y: by / bMagn });
+      continue;
     }
+
+    t.push({ x: tx / tMagn, y: ty / tMagn });
   }
 
   const out: CenterlineNode[] = [
@@ -117,10 +124,6 @@ export function fitHand(
     let b = a + 1;
     while (b <= end) {
       const arc = s[b] - s[a];
-      if (arc === 0) {
-        b++;
-        continue;
-      }
 
       const dx = x[b] - x[a];
       const dy = y[b] - y[a];
@@ -129,7 +132,7 @@ export function fitHand(
 
       const mc = chordRule(chordLength, t[a].x, t[a].y, t[b].x, t[b].y);
 
-      const twoPoints = b === a + 1 || s[b - 1] === s[a];
+      const twoPoints = b === a + 1;
       if (twoPoints) {
         mo = mc;
         mi = mc;
