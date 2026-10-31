@@ -284,7 +284,7 @@ export type FreehandPressure = "simulate" | "radius";
 // outline was removed still names it. An unknown name would index `FITS` or
 // `OUTLINES` to undefined and throw on the first render, so it falls back to
 // the default instead.
-const FIT_KINDS: FitKind[] = ["cubic", "quadratic"];
+const FIT_KINDS: FitKind[] = ["cubic"];
 const OUTLINE_MODES: OutlineMode[] = ["greedy", "node-fit", "node-quad", "freehand"];
 
 // Which outline emits contacts meant to be joined by quadratics. The library
@@ -510,10 +510,10 @@ export const INK_SECTIONS: InkSection[] = [
       {
         kind: "range",
         key: "smoothWindow",
-        label: "smooth window (pts)",
+        label: "smooth window (× pen)",
         min: 0,
-        max: 15,
-        step: 1,
+        max: 2,
+        step: 0.05,
       },
     ],
   },
@@ -538,16 +538,13 @@ export const INK_SECTIONS: InkSection[] = [
         ],
       },
       // Stage 4: which discs become nodes, and what joins two of them. Every
-      // outline above is drawn around whichever is picked here. The quadratic
-      // cannot inflect, so an S-bend between two samples becomes a chord,
-      // kinked at both ends.
+      // outline above is drawn around whichever is picked here.
       {
         kind: "select",
         key: "fit",
         label: "fit",
         choices: [
           { value: "cubic", label: "cubic — magnitudes least-squared to the samples" },
-          { value: "quadratic", label: "quadratic — control at the tangent crossing" },
         ],
         when: ifRescrawl,
       },

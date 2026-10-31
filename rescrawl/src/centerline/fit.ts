@@ -121,14 +121,83 @@ const single = (p: Point4): CenterlineNode => ({
   slope: 0,
 });
 
+// What one call settled, handed to the next so it can resume instead of
+// refitting from sample 0.
+//
+// Every decision the fit makes is local: a tangent reads D either side, a
+// corner D beyond that, and a segment end is decided by trying one sample past
+// it. So once the pen is far enough past a node, nothing more of the stroke can
+// change it, or anything before it. Such a node is settled, and the next call
+// starts its greedy walk there, recomputing the per-sample arrays only past it.
+//
+// Nothing here is trusted: the stages before the fit are rerun from raw every
+// frame and may rewrite the tail (the radius of the last sample, a disc popped
+// by `dropContained`, a smoothing window that has not closed). The next call
+// compares its input against `pts` over everything the settled nodes read, and
+// resumes from the last node whose reads all still match -- or from scratch.
+export type FitCache = {
+  o: Required<FitOptions>;
+  pts: Point4[]; // the input this was computed from
+  S: Float64Array;
+  angle: Float64Array;
+  turns: Uint8Array;
+  corner: Uint8Array;
+  tin: Float64Array;
+  tout: Float64Array;
+  slope: Float64Array;
+  nodes: CenterlineNode[]; // the whole output, settled or not
+  idx: number[]; // sample index of each settled node; nodes[0..idx.length) are settled
+  reach: number[]; // the last sample each settled node's decisions read
+};
+
+const sameOptions = (a: Required<FitOptions>, b: Required<FitOptions>) =>
+  a.maxWidth === b.maxWidth &&
+  a.fitTol === b.fitTol &&
+  a.fitCornerAngle === b.fitCornerAngle &&
+  a.fitWindow === b.fitWindow &&
+  a.fitHorizon === b.fitHorizon;
+
+const samePoint = (a: Point4, b: Point4) =>
+  a.x === b.x && a.y === b.y && a.t === b.t && a.r === b.r;
+
 export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode[] {
+  return fitCurveIncremental(pts, o, null).nodes;
+}
+
+// `fitCurve`, resuming from what `prev` settled. The output is identical to a
+// fresh fit of `pts` -- the cache only decides how much of it is recomputed.
+// `reused` is how many leading nodes came from `prev`.
+export function fitCurveIncremental(
+  pts: Point4[],
+  o: Required<FitOptions>,
+  prev: FitCache | null,
+): { nodes: CenterlineNode[]; cache: FitCache | null; reused: number } {
   const n = pts.length;
-  if (n === 0) return [];
-  if (n === 1) return [single(pts[0])];
+  if (n === 0) return { nodes: [], cache: null, reused: 0 };
+  if (n === 1) return { nodes: [single(pts[0])], cache: null, reused: 0 };
+
+  // --- where to resume ---
+  // `keep` settled nodes carry over, the last of them at sample A. The first
+  // sample that differs from `prev`'s input is k; a node is kept only if
+  // everything it read lies before k.
+  let keep = 0;
+  let A = 0;
+  if (prev !== null && prev.idx.length > 0 && sameOptions(prev.o, o)) {
+    const lim = Math.min(prev.reach[prev.reach.length - 1], n - 1, prev.pts.length - 1);
+    let k = 0;
+    while (k <= lim && samePoint(prev.pts[k], pts[k])) k++;
+    keep = prev.idx.length;
+    while (keep > 0 && prev.reach[keep - 1] >= k) keep--;
+    if (keep > 0) A = prev.idx[keep - 1];
+  }
+  // Per-sample values below `from` are copied, not recomputed. A settled node's
+  // own tangent is final, so resuming at A recomputes from A + 1.
+  const from = keep > 0 ? A + 1 : 0;
 
   // Cumulative chord length
   const S = new Float64Array(n);
-  for (let i = 1; i < n; i++) S[i] = S[i - 1] + dist(pts[i - 1], pts[i]);
+  if (keep > 0) S.set(prev!.S.subarray(0, from));
+  for (let i = Math.max(from, 1); i < n; i++) S[i] = S[i - 1] + dist(pts[i - 1], pts[i]);
 
   const D = o.fitWindow * o.maxWidth;
 
@@ -181,7 +250,8 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
 
   // --- corners ---
   const angle = new Float64Array(n);
-  for (let i = 1; i < n - 1; i++) {
+  if (keep > 0) angle.set(prev!.angle.subarray(0, from));
+  for (let i = Math.max(from, 1); i < n - 1; i++) {
     const p = armBack(i, 0);
     const c = pts[i];
     const q = armFwd(i, n - 1);
@@ -197,7 +267,8 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
   // the outline then cuts across the tip instead of wrapping it. The turnaround
   // is the sample whose own neighbours point against each other.
   const turns = new Uint8Array(n);
-  for (let i = 1; i < n - 1; i++) {
+  if (keep > 0) turns.set(prev!.turns.subarray(0, from));
+  for (let i = Math.max(from, 1); i < n - 1; i++) {
     const ax = pts[i].x - pts[i - 1].x;
     const ay = pts[i].y - pts[i - 1].y;
     const bx = pts[i + 1].x - pts[i].x;
@@ -215,7 +286,8 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
   };
 
   const corner = new Uint8Array(n);
-  for (let i = 1; i < n - 1; i++) {
+  if (keep > 0) corner.set(prev!.corner.subarray(0, from));
+  for (let i = Math.max(from, 1); i < n - 1; i++) {
     if (angle[i] < SHARP) continue;
     // Local max over ±D; among equals the turnaround wins, then the earlier point.
     let max = true;
@@ -227,6 +299,10 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
   // `tin` arrives, `tout` leaves; they differ only at corners.
   const tin = new Float64Array(2 * n);
   const tout = new Float64Array(2 * n);
+  if (keep > 0) {
+    tin.set(prev!.tin.subarray(0, 2 * from));
+    tout.set(prev!.tout.subarray(0, 2 * from));
+  }
   const secant = (i: number, lo: number, hi: number, into: Float64Array) => {
     const p = armBack(i, lo);
     const q = armFwd(i, hi);
@@ -243,29 +319,42 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
     into[2 * i] = dx;
     into[2 * i + 1] = dy;
   };
-  const bounds = [0];
-  for (let i = 1; i < n - 1; i++) if (corner[i]) bounds.push(i);
-  bounds.push(n - 1);
-  for (let k = 0; k < bounds.length - 1; k++) {
-    const lo = bounds[k];
-    const hi = bounds[k + 1];
-    for (let i = lo; i <= hi; i++) {
-      // A corner's in-tangent belongs to the run it ends, its out-tangent to
-      // the one it starts.
-      if (i > lo) secant(i, lo, hi, tin);
-      if (i < hi) secant(i, lo, hi, tout);
+  // The run each sample lies in is bounded by corners and the stroke's ends. A
+  // corner can only clamp an arm within D behind `from`, so the scan for the
+  // run start stops there; past that, bounding at 0 reads the same.
+  let lo = 0;
+  for (let j = from - 1, stop = back(from, 0); j > 0 && j >= stop; j--) {
+    if (corner[j]) {
+      lo = j;
+      break;
     }
   }
+  let hi = 0; // the next bound after i
+  for (let i = from; i < n; i++) {
+    if (hi <= i) {
+      hi = i + 1;
+      while (hi < n - 1 && !corner[hi]) hi++;
+    }
+    const bound = i === 0 || i === n - 1 || corner[i] === 1;
+    // A corner's in-tangent belongs to the run it ends, its out-tangent to
+    // the one it starts.
+    if (i > 0) secant(i, lo, bound ? i : hi, tin);
+    if (bound) lo = i;
+    if (i < n - 1) secant(i, lo, hi, tout);
+  }
   // The stroke's own ends only have one side.
-  tin[0] = tout[0];
-  tin[1] = tout[1];
+  if (from === 0) {
+    tin[0] = tout[0];
+    tin[1] = tout[1];
+  }
   tout[2 * (n - 1)] = tin[2 * (n - 1)];
   tout[2 * (n - 1) + 1] = tin[2 * (n - 1) + 1];
 
   // dr/ds. Not cut at corners -- radius does not care about direction -- and
   // shared by both segments at a node, so the envelope stays continuous there.
   const slope = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
+  if (keep > 0) slope.set(prev!.slope.subarray(0, from));
+  for (let i = from; i < n; i++) {
     const p = armBack(i, 0);
     const q = armFwd(i, n - 1);
     const ds = q.s - p.s;
@@ -344,7 +433,12 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
     mo: 0,
     slope: slope[i],
   });
-  const nodes: CenterlineNode[] = [nodeAt(0)];
+  // Settled nodes are shared with `prev`'s output and never written again --
+  // except the last, whose `mo` belongs to the segment about to be refitted,
+  // so it is copied.
+  const nodes: CenterlineNode[] =
+    keep > 0 ? [...prev!.nodes.slice(0, keep - 1), { ...prev!.nodes[keep - 1] }] : [nodeAt(0)];
+  const idx: number[] = keep > 0 ? prev!.idx.slice(0, keep) : [0];
 
   const commit = (bi: number, m: [number, number]) => {
     const a = nodes[nodes.length - 1];
@@ -352,21 +446,20 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
     a.mo = m[0];
     b.mi = m[1];
     nodes.push(b);
+    idx.push(bi);
   };
 
   // The last run's closing segment is the open one while the pen is down.
-  const runs = [0];
-  for (let i = 1; i < n - 1; i++) if (corner[i]) runs.push(i);
-  runs.push(n - 1);
-  for (let k = 0; k < runs.length - 1; k++) {
-    const lo = runs[k];
-    const hi = runs[k + 1];
-    let a = lo;
-    let i = lo + 1;
+  let a = A;
+  while (a < n - 1) {
+    // this run ends at the next corner, or the stroke's end
+    let end = a + 1;
+    while (end < n - 1 && !corner[end]) end++;
+    let i = a + 1;
 
     // A two-point segment has nothing between its ends, so it always fits.
     let fit = cubicCovers(a, i)!;
-    while (i < hi) {
+    while (i < end) {
       if (i - a < MAX_RUN && S[i + 1] - S[a] <= o.fitHorizon * o.maxWidth) {
         const m = cubicCovers(a, i + 1);
         if (m) {
@@ -381,8 +474,44 @@ export function fitCurve(pts: Point4[], o: Required<FitOptions>): CenterlineNode
       fit = cubicCovers(a, i)!;
     }
 
-    commit(hi, fit);
+    commit(end, fit);
+    a = end;
   }
 
-  return nodes;
+  // --- what is settled ---
+  // Node b was ended by trying b + 1: that read b + 1's tangent, which read
+  // the corners within D of it, which read the angles within D of those, which
+  // read D further still -- three `fwd`s -- plus one sample for `turns`. If
+  // that chain stops on distance before the last sample (which is where the
+  // pen is, and changes every frame), nothing past it can change b.
+  const reach = keep > 0 ? prev!.reach.slice(0, keep) : [];
+  for (let j = reach.length; j < nodes.length; j++) {
+    const b = idx[j];
+    if (b + 1 > n - 1) break;
+    const r = fwd(fwd(fwd(b + 1, n - 1), n - 1), n - 1) + 1;
+    if (r > n - 2) break;
+    reach.push(r);
+  }
+
+  const cache: FitCache = {
+    o: {
+      maxWidth: o.maxWidth,
+      fitTol: o.fitTol,
+      fitCornerAngle: o.fitCornerAngle,
+      fitWindow: o.fitWindow,
+      fitHorizon: o.fitHorizon,
+    },
+    pts,
+    S,
+    angle,
+    turns,
+    corner,
+    tin,
+    tout,
+    slope,
+    nodes,
+    idx: idx.slice(0, reach.length),
+    reach,
+  };
+  return { nodes, cache, reused: keep };
 }

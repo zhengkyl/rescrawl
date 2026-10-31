@@ -1,7 +1,12 @@
 // wide raw input -> narrow -> narrow -> narrow -> widen -> widen -> widen -> widen
 
-export { type CenterlineNode, fitCurve, type FitOptions } from "./centerline/fit.ts";
-export { fitQuadratic } from "./centerline/quadratic.ts";
+export {
+  type CenterlineNode,
+  type FitCache,
+  fitCurve,
+  fitCurveIncremental,
+  type FitOptions,
+} from "./centerline/fit.ts";
 export type { SmoothOptions } from "./centerline/smooth.ts";
 export {
   chordRule,

@@ -1,27 +1,9 @@
-import { chordRule, type Point4 } from "../math.ts";
+import { chordRule } from "../math.ts";
+import type { CornerPoint } from "./corner.ts";
 import type { CenterlineNode, FitOptions } from "./fit.ts";
 
-//   (ix, iy)  unit tangent arriving      (ox, oy)  unit tangent leaving
-//   mi        length arriving            mo        length leaving
-//   slope     dr/ds -- only the outline reads it; leave 0 until step 8
-//
-// The segment from node a to node b is the cubic Bezier
-//
-//   a,   a + (a.ox, a.oy) · a.mo/3,   b - (b.ix, b.iy) · b.mi/3,   b
-//
-// so mo = mi = 0 is a straight chord. The lengths are Hermite tangent
-// lengths; a Bezier handle is a third of one. That is the whole output: which
-// samples become nodes, and those numbers at each.
-//
-// thoughts
-// b/c tangent at point n changes when n + 1 point is available
-// segments are not "closed" until 2 points after end
-// at any time, a segment can lose its last point
-// and closed segments can reopen within one "frame"
-//
-//
 export function fitHand(
-  rawPts: Point4[],
+  rawPts: CornerPoint[],
   o: Required<FitOptions> & { reparam: number; open: boolean },
 ): CenterlineNode[] {
   if (rawPts.length === 0) return [];
@@ -32,6 +14,9 @@ export function fitHand(
     const curr = rawPts[i];
     if (curr.x !== prev.x || curr.y !== prev.y) {
       pts.push(curr);
+    } else if (curr.corner) {
+      // same position: keep the one that carries the flag
+      pts[pts.length - 1] = curr;
     }
   }
 
@@ -64,7 +49,8 @@ export function fitHand(
     }
   }
 
-  const t: { x: number; y: number }[] = [];
+  const tin: { x: number; y: number }[] = [];
+  const tout: { x: number; y: number }[] = [];
   for (let i = 0; i < n; i++) {
     const curr = i;
     const prev = i > 0 ? i - 1 : 0;
@@ -79,11 +65,18 @@ export function fitHand(
     const bMagn = s[next] - s[curr];
 
     if (i === 0) {
-      t.push({ x: bx / bMagn, y: by / bMagn });
+      tin.push({ x: bx / bMagn, y: by / bMagn });
+      tout.push(tin[i]);
       continue;
     }
     if (i === n - 1) {
-      t.push({ x: ax / aMagn, y: ay / aMagn });
+      tin.push({ x: ax / aMagn, y: ay / aMagn });
+      tout.push(tin[i]);
+      continue;
+    }
+    if (pts[i].corner) {
+      tin.push({ x: ax / aMagn, y: ay / aMagn });
+      tout.push({ x: bx / bMagn, y: by / bMagn });
       continue;
     }
 
@@ -92,20 +85,22 @@ export function fitHand(
     const tMagn = Math.sqrt(tx * tx + ty * ty);
 
     if (tMagn === 0) {
-      t.push({ x: bx / bMagn, y: by / bMagn });
+      tin.push({ x: bx / bMagn, y: by / bMagn });
+      tout.push(tin[i]);
       continue;
     }
 
-    t.push({ x: tx / tMagn, y: ty / tMagn });
+    tin.push({ x: tx / tMagn, y: ty / tMagn });
+    tout.push(tin[i]);
   }
 
   const out: CenterlineNode[] = [
     {
       ...pts[0],
-      ix: t[0].x,
-      iy: t[0].y,
-      ox: t[0].x,
-      oy: t[0].y,
+      ix: tin[0].x,
+      iy: tin[0].y,
+      ox: tout[0].x,
+      oy: tout[0].y,
       mi: 0,
       mo: 0,
       slope: 0,
@@ -123,7 +118,9 @@ export function fitHand(
     let mi = 0;
 
     let b = a + 1;
-    while (b <= end) {
+    // Stop once the last sample taken is a corner. The one a segment starts on
+    // does not count.
+    while (b <= end && (b - 1 === a || !pts[b - 1].corner)) {
       const arc = s[b] - s[a];
 
       const dx = x[b] - x[a];
@@ -131,7 +128,7 @@ export function fitHand(
       const chordLength = Math.sqrt(dx * dx + dy * dy);
       if (chordLength === 0) break;
 
-      const mc = chordRule(chordLength, t[a].x, t[a].y, t[b].x, t[b].y);
+      const mc = chordRule(chordLength, tout[a].x, tout[a].y, tin[b].x, tin[b].y);
 
       const twoPoints = b === a + 1;
       if (twoPoints) {
@@ -175,10 +172,10 @@ export function fitHand(
           const rjX = x[j] - h00 * x[a] - h01 * x[b];
           const rjY = y[j] - h00 * y[a] - h01 * y[b];
           A += h10 * h10;
-          B += h10 * h11 * (t[a].x * t[b].x + t[a].y * t[b].y);
+          B += h10 * h11 * (tout[a].x * tin[b].x + tout[a].y * tin[b].y);
           C += h11 * h11;
-          E += h10 * (t[a].x * rjX + t[a].y * rjY);
-          F += h11 * (t[b].x * rjX + t[b].y * rjY);
+          E += h10 * (tout[a].x * rjX + tout[a].y * rjY);
+          F += h11 * (tin[b].x * rjX + tin[b].y * rjY);
         }
         const det = A * C - B * B;
         ma = (E * C - B * F) / det;
@@ -190,7 +187,8 @@ export function fitHand(
         const stalls = (m1: number, m2: number) =>
           m1 <= 0 ||
           m2 <= 0 ||
-          speedRatio(dx, dy, t[a].x * m1, t[a].y * m1, t[b].x * m2, t[b].y * m2) < alpha * alpha;
+          speedRatio(dx, dy, tout[a].x * m1, tout[a].y * m1, tin[b].x * m2, tin[b].y * m2) <
+            alpha * alpha;
 
         if (det === 0 || stalls(ma, mb)) {
           // when does this stall?
@@ -217,10 +215,10 @@ export function fitHand(
           }
         }
 
-        taX = t[a].x * ma;
-        taY = t[a].y * ma;
-        tbX = t[b].x * mb;
-        tbY = t[b].y * mb;
+        taX = tout[a].x * ma;
+        taY = tout[a].y * ma;
+        tbX = tin[b].x * mb;
+        tbY = tin[b].y * mb;
 
         fits = true;
         for (let j = a + 1; j < b; j++) {
@@ -299,10 +297,10 @@ export function fitHand(
     out[out.length - 1].mo = mo;
     out.push({
       ...pts[b],
-      ix: t[b].x,
-      iy: t[b].y,
-      ox: t[b].x,
-      oy: t[b].y,
+      ix: tin[b].x,
+      iy: tin[b].y,
+      ox: tout[b].x,
+      oy: tout[b].y,
       mi: mi,
       mo: 0,
       slope: 0,
@@ -315,14 +313,20 @@ export function fitHand(
     const tip = n - 1;
     const dx = x[tip] - x[end];
     const dy = y[tip] - y[end];
-    const m = chordRule(Math.sqrt(dx * dx + dy * dy), t[end].x, t[end].y, t[tip].x, t[tip].y);
+    const m = chordRule(
+      Math.sqrt(dx * dx + dy * dy),
+      tout[end].x,
+      tout[end].y,
+      tin[tip].x,
+      tin[tip].y,
+    );
     out[out.length - 1].mo = m;
     out.push({
       ...pts[tip],
-      ix: t[tip].x,
-      iy: t[tip].y,
-      ox: t[tip].x,
-      oy: t[tip].y,
+      ix: tin[tip].x,
+      iy: tin[tip].y,
+      ox: tout[tip].x,
+      oy: tout[tip].y,
       mi: m,
       mo: 0,
       slope: 0,

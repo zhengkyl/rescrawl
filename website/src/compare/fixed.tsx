@@ -70,11 +70,11 @@ export function FixedSettings({
 
       <GroupLabel>Centerline</GroupLabel>
       <Slider
-        label="smooth window (pts)"
+        label="smooth window (x pen)"
         value={options.smoothWindow}
         min={0}
-        max={15}
-        step={1}
+        max={2}
+        step={0.05}
         onInput={set("smoothWindow")}
       />
 

@@ -1,5 +1,4 @@
 import { type CenterlineNode, fitCurve, type FitOptions } from "./centerline/fit.ts";
-import { fitQuadratic } from "./centerline/quadratic.ts";
 import { dropContained, smoothPositions, type SmoothOptions } from "./centerline/smooth.ts";
 import type { Point3, Point4 } from "./math.ts";
 import type { OutlineNode } from "./outline/contact.ts";
@@ -20,10 +19,9 @@ import { toRadiiPointsFromRawSamples, type RadiusOptions } from "./thickness/rad
 // then selectable everywhere a fit is named, against every outline below.
 // Copy an existing one rather than sharing its internals, so the two can be
 // compared without moving each other.
-export type FitKind = "cubic" | "quadratic";
+export type FitKind = "cubic";
 export const FITS: Record<FitKind, (pts: Point4[], o: Required<FitOptions>) => CenterlineNode[]> = {
   cubic: fitCurve,
-  quadratic: fitQuadratic,
 };
 
 // Stage 5, the outline: where the contacts go on the envelope the nodes sweep.
