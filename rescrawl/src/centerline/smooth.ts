@@ -1,93 +1,66 @@
-import { dist } from "../math.ts";
-import type { CornerPoint } from "./corner.ts";
+import { dist, type Point3 } from "../math.ts";
 
 export type SmoothOptions = {
-  maxWidth?: number;
-  smoothWindow?: number; // × maxWidth of arc length either side of a point averaged into it; 0 is no smoothing
+  smoothWindow?: number;
+  minMove?: number;
 };
 
-export function smoothPositions(points: CornerPoint[], o: Required<SmoothOptions>): CornerPoint[] {
+export type Sample = { x: number; y: number; tStart: number; tEnd: number };
+
+// an arc length window restricts smoothing to dense sections
+//
+// weighting by distance prevents neighbors collapsing to same point
+// symmetric on both sides, TODO: test alternate shapes, eg, back only
+//
+// must filter on post smoothed distances to avoid missing collapses
+export function toSmoothSamples(points: Point3[], o: Required<SmoothOptions>) {
   const n = points.length;
-  const W = o.smoothWindow * o.maxWidth;
-  if (W <= 0 || n === 0) return points;
-  const out: CornerPoint[] = [];
+  const W = o.smoothWindow;
 
-  // next[i]: the first corner at or after i, or the last point
-  const next = new Int32Array(n);
-  for (let i = n - 1, c = n - 1; i >= 0; i--) {
-    if (points[i].corner) c = i;
-    next[i] = c;
-  }
+  if (n === 0) return { points: [] as Sample[], prefixSum: new Float64Array(0) };
 
-  // TODO, derive stay/travel from lowest interval?
-  // exclusive prefix sums: prefixX[i] is the sum of stroke[0..i-1]
-  const prefixX: number[] = [0];
-  const prefixY: number[] = [0];
-  for (let i = 0; i < n; i++) {
-    prefixX.push(prefixX[i] + points[i].x);
-    prefixY.push(prefixY[i] + points[i].y);
-  }
+  // there are 0 and negative timesteps
+  // we assume timestamps are late, but sample order is correct
+  const t = points.map((p) => p.t);
+  for (let i = n - 2; i >= 0; i--) t[i] = Math.min(t[i], t[i + 1]);
 
-  // S[i]: arc length from the first point to point i
-  const S = new Float64Array(n);
-  for (let i = 1; i < n; i++) S[i] = S[i - 1] + dist(points[i - 1], points[i]);
+  const s = new Float64Array(n);
+  for (let i = 1; i < n; i++) s[i] = s[i - 1] + dist(points[i - 1], points[i]);
 
-  let prev = 0; // the last corner at or before i, or the first point
-  for (let i = 0; i < n; i++) {
-    if (points[i].corner) prev = i;
-    // The same reach both ways, cut to what fits before `prev` and after
-    // `next[i]`, so the window is centred on the point in arc length.
-    const reach = Math.min(W, S[i] - S[prev], S[next[i]] - S[i]);
-    let start = i;
-    while (start > prev && S[i] - S[start - 1] <= reach) start--;
-    let end = i;
-    while (end < next[i] && S[end + 1] - S[i] <= reach) end++;
-    // At the ends and corners the window is the point itself. Take it verbatim
-    // rather than averaging it with nothing: differencing the prefix sums there subtracts
-    // two large accumulated numbers and loses the low bits, so the endpoint
-    // would drift by ~1e-12 instead of passing through exactly.
-    if (start === end) {
-      out.push(points[i]);
+  const out: Sample[] = [{ x: points[0].x, y: points[0].y, tStart: t[0], tEnd: t[0] }];
+  const outS = new Float64Array(n);
+
+  for (let i = 1; i < n; i++) {
+    const pi = points[i];
+    let x = pi.x;
+    let y = pi.y;
+    let sum = 1;
+
+    if (W > 0) {
+      const reach = Math.min(W, s[i], s[n - 1] - s[i]);
+      for (let j = i - 1; j >= 0 && s[i] - s[j] <= reach; j--) {
+        const w = 1 - (s[i] - s[j]) / W;
+        x += w * points[j].x;
+        y += w * points[j].y;
+        sum += w;
+      }
+      for (let j = i + 1; j < n && s[j] - s[i] <= reach; j++) {
+        const w = 1 - (s[j] - s[i]) / W;
+        x += w * points[j].x;
+        y += w * points[j].y;
+        sum += w;
+      }
+    }
+
+    const next = { x: x / sum, y: y / sum, tStart: t[i], tEnd: t[i] };
+    const d = dist(out[out.length - 1], next);
+    if (d <= o.minMove) {
+      out[out.length - 1].tEnd = t[i];
       continue;
     }
-    const span = end - start + 1;
-    out.push({
-      x: (prefixX[end + 1] - prefixX[start]) / span,
-      y: (prefixY[end + 1] - prefixY[start]) / span,
-      t: points[i].t,
-      r: points[i].r,
-    });
+    outS[out.length] = outS[out.length - 1] + d;
+    out.push(next);
   }
-  return out;
-}
 
-// A corner is never dropped: the fit has to find it to end a segment there.
-// Where a corner and a neighbour contain one another, both are kept.
-export function dropContained(pts: CornerPoint[]) {
-  const out: CornerPoint[] = [];
-  for (const p of pts) {
-    let keep = true;
-    while (out.length) {
-      const q = out[out.length - 1];
-
-      const dx = p.x - q.x;
-      const dy = p.y - q.y;
-      const dr = p.r - q.r;
-      if (dx * dx + dy * dy > dr * dr) {
-        break; // dist > delta r, nodes do not contain each other
-      }
-
-      if (dr < 0) {
-        // q contains p
-        keep = p.corner === true;
-        break;
-      }
-
-      // p contains q
-      if (q.corner) break;
-      out.pop();
-    }
-    if (keep) out.push(p);
-  }
-  return out;
+  return { points: out, prefixSum: outS.subarray(0, out.length) };
 }
