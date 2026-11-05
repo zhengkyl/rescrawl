@@ -2,7 +2,7 @@ import type { ReadonlySignal, Signal } from "@preact/signals";
 import { batch, useComputed, useSignal } from "@preact/signals";
 import type { ComponentChildren, JSX } from "preact";
 import { useMemo, useRef, useState } from "preact/hooks";
-import type { Point3 } from "rescrawl";
+import { holdEndUntil, type Point3 } from "rescrawl";
 import type { FixedOptions } from "./fixed";
 import { FIXED_DEFAULTS, FixedSettings, fixedPath } from "./fixed";
 import type { FreehandOptions } from "./freehand";
@@ -88,17 +88,15 @@ function usePen(commit: (stroke: Stroke) => void): Pen {
 
   const now = () => performance.now() - startRef.current;
 
-  // While the pen is down, republish the stroke every frame with a trailing tip
-  // at (last position, now) — that dwell is what the width model reads when the
-  // pen stops moving, so the ink thickens under a held pen.
+  // While the pen is down, republish the stroke every frame with the pen held
+  // where it is until now, so the ink thickens under a held pen.
   function frame() {
     const rec = recRef.current;
     if (rec === null) {
       loopRef.current = null;
       return;
     }
-    const last = rec[rec.length - 1];
-    points.value = [...rec, { x: last.x, y: last.y, t: now() }];
+    points.value = holdEndUntil(rec, now());
     loopRef.current = requestAnimationFrame(frame);
   }
 
@@ -113,9 +111,6 @@ function usePen(commit: (stroke: Stroke) => void): Pen {
     move(x, y) {
       const rec = recRef.current;
       if (rec === null) return;
-      const last = rec[rec.length - 1];
-      // ignore non-movement updates (e.g. pens)
-      if (x === last.x && y === last.y) return;
       rec.push({ x, y, t: now() });
     },
     up() {
@@ -123,10 +118,8 @@ function usePen(commit: (stroke: Stroke) => void): Pen {
       if (rec === null) return;
       if (loopRef.current !== null) cancelAnimationFrame(loopRef.current);
       loopRef.current = null;
-      // The release point (final position + release time) so every stroke has
-      // >= 2 points and the end dwell is recorded.
-      const last = rec[rec.length - 1];
-      const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: now() }];
+      // The pen held until release, so the end dwell is recorded.
+      const stroke: Stroke = holdEndUntil(rec, now());
       recRef.current = null;
       points.value = null;
       commit(stroke);

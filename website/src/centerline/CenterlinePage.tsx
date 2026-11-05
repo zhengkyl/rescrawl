@@ -1,34 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
-import type { CenterlineNode, Point2, Point3, Point4 } from "rescrawl";
-import { RENDER_DEFAULTS, toRadiiPointsFromRawSamples } from "rescrawl";
-import { type CornerPoint, type CornerTrace, markCorners } from "rescrawl/centerline/corner";
-import { fitHand } from "rescrawl/centerline/hand";
-import { type FitCache, fitCurve, fitCurveIncremental } from "rescrawl/centerline/fit";
-import { dropContained, smoothPositions } from "rescrawl/centerline/smooth";
-import { retime } from "rescrawl/timestamps";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import type { CenterlineNode, Point2, Point3, Point4, RenderOptions } from "rescrawl";
+import { centerlineStages, fitCenterline, holdEndUntil, RENDER_DEFAULTS, toDrawingPx } from "rescrawl";
+import { type CornerTrace, markCorners } from "rescrawl/centerline/corner";
 import { deserialize } from "../utils";
 import "./centerline.css";
 
 // A bench for the raw-points-to-centerline half of the pipeline, and nothing
 // past it -- no outline. One stroke goes in, through
 //
-//   radius -> corners -> smoothing -> drop contained -> fit
+//   smoothing -> retime -> radius -> corners -> fit
 //
-// with a choice at each step, and the fit comes out as cubics. Every fitter's
-// output is converted to plain Bezier cubics before drawing, so a node list, a
-// cubic list and a polyline all draw the same way and are measured the same
-// way.
+// -- the library's own pipeline, `centerlineStages` then `fitCenterline`, with
+// the knobs here folded into its options -- and the fit comes out as plain
+// Bezier cubics, for drawing and measuring.
 //
 // The `fed` scrubber walks the input back a sample at a time and reruns
 // everything on that prefix -- which is what the live app does every frame --
-// so a fitter can be watched making each decision.
+// so the fit can be watched making each decision.
 
 type RadiusKind = "speed" | "fixed";
-type SmoothKind = "none" | "average";
-type FitKind = "polyline" | "cubic" | "hand";
-const SMOOTH_KINDS: SmoothKind[] = ["none", "average"];
-const FIT_KINDS: FitKind[] = ["polyline", "cubic", "hand"];
 
 type Cubic = [Point2, Point2, Point2, Point2];
 // How a stroke was recorded. `coalesced`: whether the events the browser
@@ -43,22 +34,14 @@ const DEFAULTS = {
   widthLag: RENDER_DEFAULTS.widthLag,
 
   corners: false,
-  cornerArm: 0.5,
-  cornerRatio: 4,
+  cornerArm: RENDER_DEFAULTS.cornerArm,
   cornerTurn: 30,
   cornerDebug: false,
 
-  smooth: "none" as SmoothKind,
-  smoothWindow: 0.5,
+  smoothWindow: RENDER_DEFAULTS.smoothWindow,
 
-  drop: true,
 
-  fit: "cubic" as FitKind,
-  fitTol: RENDER_DEFAULTS.fitTol,
-  fitCornerAngle: RENDER_DEFAULTS.fitCornerAngle,
-  fitWindow: RENDER_DEFAULTS.fitWindow,
-  fitHorizon: RENDER_DEFAULTS.fitHorizon,
-  incremental: true,
+  handTol: RENDER_DEFAULTS.handTol,
   reparam: 2,
   holdBack: true,
 
@@ -76,13 +59,14 @@ const DEFAULTS = {
   onionFrames: 5,
 
   coalesced: true,
-  retime: false,
   framePeriod: 1000 / 60,
-  pauseFrames: 2,
+  minMove: RENDER_DEFAULTS.minMove,
 };
 type Settings = typeof DEFAULTS;
 
-const SETTINGS_KEY = "rescrawl-centerline-settings";
+// Versioned: lengths moved from multiples of the pen to screen px, and a value
+// saved under the old meaning reads as a different one.
+const SETTINGS_KEY = "rescrawl-centerline-settings-3";
 const STROKES_KEY = "rescrawl-centerline-strokes";
 
 // Storage can be missing or throw (private windows, blocked site data); the
@@ -98,41 +82,27 @@ function load<T>(key: string, fallback: T): T {
 function save(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
+  } catch { }
 }
 
-// --- the pipeline, one plain function per step ---
+// --- the pipeline ---
 
-// Before stage 1: the stamps made into times the pen was there, with a sample
-// where it sat through each pause -- or the samples as recorded.
-const retimed = (raw: Point3[], s: Settings) => (s.retime ? retime(raw, s) : raw);
+// The knobs as the library's options, for a stroke drawn at `zoom`. "fixed"
+// radius is min = max width, which holds the radius at the full pen whatever
+// the speed -- pen speed out of the picture when only the path is under study.
+const pipelineOptions = (s: Settings, zoom: number): RenderOptions => ({
+  ...s,
+  zoom,
+  minWidth: s.radius === "fixed" ? s.maxWidth : s.minWidth,
+});
 
-// The pipeline's own stage 1, or every point at the full pen radius -- which
-// takes pen speed out of the picture when only the path is under study.
-function toRadius(raw: Point3[], s: Settings): Point4[] {
-  if (s.radius === "fixed") return raw.map((p) => ({ ...p, r: s.maxWidth / 2 }));
-  return toRadiiPointsFromRawSamples(raw, s);
-}
-
-const corners = (pts: Point4[], s: Settings): CornerPoint[] =>
-  s.corners ? markCorners(pts, s) : pts;
-
-function traceCorners(pts: Point4[], s: Settings): CornerTrace[] {
+// The corners stage again, for its trace: called directly, so its options are
+// put in drawing px here, as the pipeline would.
+function traceCorners(pts: Point4[], prefixSum: Float64Array, s: Settings, zoom: number): CornerTrace[] {
   const trace: CornerTrace[] = [];
-  markCorners(pts, s, trace);
+  markCorners(pts, prefixSum, toDrawingPx({ ...RENDER_DEFAULTS, ...pipelineOptions(s, zoom) }), trace);
   return trace;
 }
-
-function smooth(pts: CornerPoint[], s: Settings): CornerPoint[] {
-  switch (s.smooth) {
-    case "none":
-      return pts;
-    case "average":
-      return smoothPositions(pts, s);
-  }
-}
-
-const drop = (pts: CornerPoint[], s: Settings) => (s.drop ? dropContained(pts) : pts);
 
 // A node list as Bezier cubics, the same conversion `fitPath` makes: control
 // points a third of the Hermite tangent in from each end. Zero magnitudes at
@@ -154,84 +124,26 @@ function nodeCubics(ns: CenterlineNode[]): Cubic[] {
   return out;
 }
 
-// `cache` and `reused` are only ever set by the incremental cubic fit: `prev`
-// is what the previous frame's call settled, and `reused` how many of its nodes
-// this call took over instead of refitting.
-// `times`: each node's t, one more than there are cubics.
+// The fit as drawn: its nodes as cubics, and each node's t, one more than
+// there are cubics.
 type Fitted = {
   cubics: Cubic[];
   times: number[];
-  cache: FitCache | null;
-  reused: number;
 };
 
-// `open`: the pen is still down, so more samples are coming. Only the hand fit
-// reads it.
-function fit(pts: CornerPoint[], s: Settings, prev: FitCache | null, open: boolean): Fitted {
-  const plain = (cubics: Cubic[], times: number[]): Fitted => ({
-    cubics,
-    times,
-    cache: null,
-    reused: 0,
-  });
-  switch (s.fit) {
-    case "polyline": {
-      // No fit at all: every input point kept, joined by chords. The baseline
-      // the others are simplifying.
-      const out: Cubic[] = [];
-      for (let i = 1; i < pts.length; i++) out.push([pts[i - 1], pts[i - 1], pts[i], pts[i]]);
-      return plain(
-        out,
-        pts.map((p) => p.t),
-      );
-    }
-    case "cubic": {
-      if (!s.incremental) {
-        const nodes = fitCurve(pts, s);
-        return plain(
-          nodeCubics(nodes),
-          nodes.map((n) => n.t),
-        );
-      }
-      const r = fitCurveIncremental(pts, s, prev);
-      return {
-        cubics: nodeCubics(r.nodes),
-        times: r.nodes.map((n) => n.t),
-        cache: r.cache,
-        reused: r.reused,
-      };
-    }
-    case "hand": {
-      // fitCurve rebuilt step by step -- see centerline/hand.ts.
-      const held = s.holdBack && open;
-      const nodes = fitHand(pts, { ...s, open: held });
-      return plain(
-        nodeCubics(nodes),
-        nodes.map((n) => n.t),
-      );
-    }
-  }
-}
-
-const sameCubics = (a: Cubic[], b: Cubic[]) =>
-  a.length === b.length &&
-  a.every((c, i) => c.every((p, j) => p.x === b[i][j].x && p.y === b[i][j].y));
-
-// The stroke as it stood after `fed` samples. The radius stage keeps a point
-// only once it has a successor to measure speed against: a finished stroke gets
-// that from its pointer-up sample, and the live app from a tip it re-adds every
-// frame. Mirror that tip here, or the fit would sit one sample behind the
-// scrubber.
-function prefix(stroke: Point3[], fed: number): Point3[] {
-  if (fed <= 0 || fed >= stroke.length) return stroke.slice(0, fed);
-  const head = stroke.slice(0, fed);
-  head.push({ ...head[fed - 1] });
-  return head;
+// The stroke as it stood after `fed` samples, through the whole pipeline.
+// `open`: the pen is still down, so more samples are coming.
+function run(stroke: Point3[], fed: number, s: Settings, zoom: number, open: boolean) {
+  const o = pipelineOptions(s, zoom);
+  const stages = centerlineStages(stroke.slice(0, fed), o);
+  const nodes = fitCenterline(stages, o, open);
+  const fitted: Fitted = { cubics: nodeCubics(nodes), times: nodes.map((n) => n.t) };
+  return { stages, fitted };
 }
 
 // Mean ms per call. One call is under the timer's resolution for most strokes,
 // so with `repeat` it reruns until ~1ms has passed (at most 20 calls). Not
-// while drawing: every stage repeated on every frame is what made drawing lag.
+// while drawing: the pipeline repeated on every frame is what made drawing lag.
 // The numbers settle once the pen lifts.
 function timed<T>(f: () => T, repeat: boolean): [T, number] {
   if (!repeat) {
@@ -657,7 +569,7 @@ function Section(props: { title: string; children: ComponentChildren }) {
 
 // --- corner inspector ---
 
-// out/in per vertex, log scale; corner where it is above the ratio line
+// out/in per vertex, log scale, with each vertex's turn below it
 function CornerStrip(props: {
   trace: CornerTrace[];
   s: Settings;
@@ -670,8 +582,8 @@ function CornerStrip(props: {
   const TH = 40;
 
   const plot = useMemo(() => {
-    let lo = 1 / s.cornerRatio;
-    let hi = s.cornerRatio;
+    let lo = 1;
+    let hi = 1;
     for (const r of trace) {
       lo = Math.min(lo, r.out / r.in);
       hi = Math.max(hi, r.out / r.in);
@@ -693,13 +605,12 @@ function CornerStrip(props: {
     return {
       ratio,
       corners,
-      gate: `M0 ${y(s.cornerRatio)}H${N}`,
       one: `M0 ${y(1)}H${N}`,
       turn,
       lo,
       hi: Math.exp(L1),
     };
-  }, [trace, s.cornerRatio]);
+  }, [trace]);
 
   const i = trace.findIndex((r) => r.at === props.probe);
   const row = i === -1 ? null : trace[i];
@@ -722,16 +633,14 @@ function CornerStrip(props: {
             </span>
             <span>in {fmt(row.in)}px</span>
             <span>out {fmt(row.out)}px</span>
-            <span class={row.out >= s.cornerRatio * row.in ? "ok" : "warn"}>
-              ×{fmt(row.out / row.in)}
-            </span>
+            <span>×{fmt(row.out / row.in)}</span>
             <span class={row.turn >= s.cornerTurn ? "ok" : "warn"}>turn {fmt(row.turn, 0)}°</span>
             <span class={row.corner ? "ok" : "dim"}>{row.corner ? "→ corner" : "→ not"}</span>
           </>
         )}
         <span class="spacer" />
         <span class="dim">
-          need ×{fmt(s.cornerRatio)}, {s.cornerTurn}°
+          need {s.cornerTurn}°
         </span>
       </div>
       <div class="strip-plot">
@@ -757,13 +666,6 @@ function CornerStrip(props: {
             d={plot.corners}
             stroke={CORNER_COLOR}
             stroke-width="2"
-            vector-effect="non-scaling-stroke"
-          />
-          <path
-            d={plot.gate}
-            stroke="#e0a050"
-            stroke-width="1"
-            stroke-dasharray="3 2"
             vector-effect="non-scaling-stroke"
           />
           <path
@@ -827,7 +729,7 @@ function CornerStrip(props: {
       </div>
       <div class="strip-key">
         <span style={{ color: "#8ab4f8" }}>out/in, turn</span>
-        <span style={{ color: "#e0a050" }}>ratio, min turn</span>
+        <span style={{ color: "#e0a050" }}>min turn</span>
         <span style={{ color: "#666" }}>×1</span>
         <span style={{ color: CORNER_COLOR }}>corner</span>
       </div>
@@ -836,16 +738,7 @@ function CornerStrip(props: {
 }
 
 export function CenterlinePage() {
-  const [s, setS] = useState<Settings>(() => {
-    const saved = load(SETTINGS_KEY, DEFAULTS);
-    // Saved before a smoothing or fit kind was removed: fall back rather than
-    // match no case.
-    return {
-      ...saved,
-      smooth: SMOOTH_KINDS.includes(saved.smooth) ? saved.smooth : DEFAULTS.smooth,
-      fit: FIT_KINDS.includes(saved.fit) ? saved.fit : DEFAULTS.fit,
-    };
-  });
+  const [s, setS] = useState<Settings>(() => load(SETTINGS_KEY, DEFAULTS));
   const set = (patch: Partial<Settings>) => setS((prev) => ({ ...prev, ...patch }));
 
   // Imports can hold several strokes; one is on the bench at a time.
@@ -885,13 +778,15 @@ export function CenterlinePage() {
     if (liveRef.current === null) save(STROKES_KEY, { strokes, index, meta });
   }, [strokes, index, meta]);
 
+  // The zoom the stroke was drawn at: stage 0's filter is in screen px, as the
+  // pen moved on screen. An imported stroke does not say, so 1.
+  const drawnZoom = meta?.zoom ?? 1;
+
   // The same pipeline one sample earlier: what was on screen the frame before.
-  // Its cache is what the incremental fit resumes from this frame, as it would
-  // live.
   const ghost = useMemo((): Fitted => {
-    if (fed < 2) return { cubics: [], times: [], cache: null, reused: 0 };
-    return fit(drop(smooth(corners(toRadius(retimed(prefix(stroke, fed - 1), s), s), s), s), s), s, null, true);
-  }, [stroke, fed, s]);
+    if (fed < 2) return { cubics: [], times: [] };
+    return run(stroke, fed - 1, s, drawnZoom, true).fitted;
+  }, [stroke, fed, s, drawnZoom]);
 
   // Onion skin: the last `onionFrames` frames before this one, newest first,
   // each as it stood with the pen still down. The newest is the ghost.
@@ -902,48 +797,32 @@ export function CenterlinePage() {
       const cubics =
         j === 1
           ? ghost.cubics
-          : fit(drop(smooth(corners(toRadius(retimed(prefix(stroke, fed - j), s), s), s), s), s), s, null, true)
-              .cubics;
+          : run(stroke, fed - j, s, drawnZoom, true).fitted.cubics;
       out.push(cubicsPath(cubics));
     }
     return out;
-  }, [stroke, fed, s, ghost]);
+  }, [stroke, fed, s, drawnZoom, ghost]);
 
   const frame = useMemo(() => {
-    const raw = retimed(prefix(stroke, fed), s);
     const repeat = !drawing;
-    const [radius, tRadius] = timed(() => toRadius(raw, s), repeat);
-    const [cornered, tCorner] = timed(() => corners(radius, s), repeat);
-    const trace = s.corners && s.cornerDebug ? traceCorners(radius, s) : null;
-    const [smoothed, tSmooth] = timed(() => smooth(cornered, s), repeat);
-    const [input, tDrop] = timed(() => drop(smoothed, s), repeat);
+    const o = pipelineOptions(s, drawnZoom);
+    const [stages, tCenterline] = timed(() => centerlineStages(stroke.slice(0, fed), o), repeat);
+    const trace = s.corners && s.cornerDebug ? traceCorners(stages.radius, stages.prefixSum, s, drawnZoom) : null;
     // Open while drawing, and whenever the scrubber stops short of the end: that
     // prefix is the stroke as it stood with the pen still down.
     const open = drawing || fed < stroke.length;
-    const [fitted, tFit] = timed(() => fit(input, s, ghost.cache, open), repeat);
-    // The incremental fit, held to a fresh one: same output, and how much
-    // faster.
-    let fresh = null;
-    if (s.fit === "cubic" && s.incremental) {
-      const [cubics, ms] = timed(() => nodeCubics(fitCurve(input, s)), repeat);
-      fresh = { ms, same: sameCubics(cubics, fitted.cubics) };
-    }
+    const [nodes, tFit] = timed(() => fitCenterline(stages, o, open), repeat);
     return {
-      raw,
-      radius,
+      raw: stages.radius,
+      radius: stages.radius,
       trace,
-      input,
-      cubics: fitted.cubics,
-      times: fitted.times,
-      reused: fitted.reused,
-      fresh,
-      tRadius,
-      tCorner,
-      tSmooth,
-      tDrop,
+      input: stages.radius,
+      cubics: nodeCubics(nodes),
+      times: nodes.map((n) => n.t),
+      tCenterline,
       tFit,
     };
-  }, [stroke, fed, s, ghost, drawing]);
+  }, [stroke, fed, s, drawnZoom, drawing]);
 
   // How densely the stroke was sampled. The pen-up sample repeats the last
   // position, so zero-length gaps are left out.
@@ -963,7 +842,7 @@ export function CenterlinePage() {
 
   const stats = useMemo(() => {
     const polys = sampleCubics(frame.cubics);
-    // Against the samples the pen actually laid down, not the tip copy.
+    // Against the samples the pen actually laid down.
     const raw = deviation(stroke.slice(0, fed), polys);
     const input = deviation(frame.input, polys);
     // How far ink from the frame before moved, leaving out that frame's last
@@ -978,12 +857,9 @@ export function CenterlinePage() {
     };
   }, [frame, ghost, stroke, fed]);
 
-  // The samples the pen actually laid down, not the tip copy, timed as the
-  // pipeline saw them. The replay is held against these.
-  const laid = useMemo(
-    () => retimed(stroke.slice(0, fed), s),
-    [stroke, fed, s.retime, s.framePeriod, s.pauseFrames],
-  );
+  // The samples timed as the pipeline saw them. The replay is held against
+  // these.
+  const laid = frame.raw;
   // Not while drawing: it is read once the pen lifts.
   const replay = useMemo(
     () => (drawing ? null : replayError(laid, frame.cubics, frame.times)),
@@ -1130,15 +1006,19 @@ export function CenterlinePage() {
       setMeta(
         typeof data.pointerType === "string"
           ? {
-              pointerType: data.pointerType,
-              zoom: data.zoom ?? 1,
-              coalesced: data.coalesced === true,
-            }
+            pointerType: data.pointerType,
+            zoom: data.zoom ?? 1,
+            coalesced: data.coalesced === true,
+          }
           : null,
       );
     } catch {
-      next = deserialize(text);
-      setMeta(null);
+      // A .scrawl from the main page. The bench keeps one note of how its
+      // strokes were drawn, so they take the first one's zoom.
+      const imported = deserialize(text);
+      next = imported.map((st) => st.points);
+      const zoom = imported[0]?.zoom ?? 1;
+      setMeta(zoom === 1 ? null : { pointerType: "imported", zoom, coalesced: false });
     }
     next = next.filter((st) => Array.isArray(st) && st.length > 0);
     if (next.length === 0) return;
@@ -1149,7 +1029,7 @@ export function CenterlinePage() {
   async function paste() {
     try {
       importText(await navigator.clipboard.readText());
-    } catch {}
+    } catch { }
   }
 
   // Everything needed to replay this frame outside the page: the fed samples
@@ -1223,9 +1103,8 @@ export function CenterlinePage() {
     };
   };
 
-  // Recorded the way the main app records: t in ms from pen-down, repeated
-  // positions skipped, and a final sample at the last position on pen-up so
-  // the release time is kept.
+  // Recorded the way the main app records: t in ms from pen-down, and the pen
+  // held at its last position until pen-up so the release time is kept.
   function handlePointerDown(e: PointerEvent) {
     // Middle button pans, left button draws.
     if (e.button === 1) {
@@ -1272,10 +1151,7 @@ export function CenterlinePage() {
     const merged =
       s.coalesced && typeof e.getCoalescedEvents === "function" ? e.getCoalescedEvents() : [];
     for (const ev of merged.length > 0 ? merged : [e]) {
-      const p = toContent(ev);
-      const last = live[live.length - 1];
-      if (p.x === last.x && p.y === last.y) continue;
-      live.push({ ...p, t: ev.timeStamp - t0.current });
+      live.push({ ...toContent(ev), t: ev.timeStamp - t0.current });
     }
     if (frameReq.current === 0) {
       frameReq.current = requestAnimationFrame(() => {
@@ -1292,11 +1168,9 @@ export function CenterlinePage() {
     if (live === null) return;
     cancelAnimationFrame(frameReq.current);
     frameReq.current = 0;
-    const last = live[live.length - 1];
-    live.push({ x: last.x, y: last.y, t: e.timeStamp - t0.current });
     liveRef.current = null;
     setDrawing(false);
-    pick([live], 0);
+    pick([holdEndUntil(live, e.timeStamp - t0.current)], 0);
   }
 
   function zoomAt(e: WheelEvent, factor: number) {
@@ -1407,32 +1281,28 @@ export function CenterlinePage() {
               value={s.coalesced}
               onInput={(coalesced) => set({ coalesced })}
             />
-            <Check label="retime" value={s.retime} onInput={(retime) => set({ retime })} />
-            {s.retime && (
-              <>
-                <Knob
-                  label="frame ms"
-                  title="ms between input frames. A run of samples on one ms is spread back over at most this."
-                  min={4}
-                  max={34}
-                  step={0.1}
-                  value={s.framePeriod}
-                  onInput={(framePeriod) => set({ framePeriod })}
-                />
-                <Knob
-                  label="pause"
-                  title="A gap longer than this many frames is the pen sitting still: it gets a sample where the pen sat, stamped one frame before the motion that ended it."
-                  min={1}
-                  max={10}
-                  step={0.5}
-                  value={s.pauseFrames}
-                  onInput={(pauseFrames) => set({ pauseFrames })}
-                />
-                <p class="note">
-                  stamps trusted to be late, never early; the pause sample is the live tip, frozen
-                </p>
-              </>
-            )}
+            <Knob
+              label="frame ms"
+              title="ms between input frames. A run of samples on one ms is spread back over at most this; any more of a gap is the pen sitting still."
+              min={4}
+              max={34}
+              step={0.1}
+              value={s.framePeriod}
+              onInput={(framePeriod) => set({ framePeriod })}
+            />
+            <Knob
+              label="min move"
+              title="Screen px a sample must be from the last one kept, or it is folded into it: the one filter in the pipeline. The first is kept, later ones only extend how long the pen stayed."
+              min={0}
+              max={6}
+              step={0.1}
+              value={s.minMove}
+              onInput={(minMove) => set({ minMove })}
+            />
+            <p class="note">
+              stamps trusted to be late, never early; a sample within min move, or a gap past one
+              frame, is the pen sitting still until it leaves
+            </p>
           </Section>
 
           <Section title="radius">
@@ -1443,7 +1313,7 @@ export function CenterlinePage() {
             />
             <Knob
               label="max width"
-              title="Pen width at a standstill. Also the unit fit window, horizon and fixed radius are measured in."
+              title="Pen width at a standstill. Also the fixed radius."
               min={1}
               max={40}
               step={0.5}
@@ -1463,7 +1333,7 @@ export function CenterlinePage() {
                 />
                 <Knob
                   label="thin speed"
-                  title="px/ms at which the stroke reaches min width."
+                  title="Screen px/ms at which the stroke reaches min width."
                   min={0.1}
                   max={5}
                   step={0.1}
@@ -1485,7 +1355,7 @@ export function CenterlinePage() {
 
           <Section title="corners">
             <Check
-              label="detect by out/in chord"
+              label="detect corners"
               value={s.corners}
               onInput={(corners) => set({ corners })}
             />
@@ -1493,21 +1363,12 @@ export function CenterlinePage() {
               <>
                 <Knob
                   label="arm"
-                  title="× max width of arc length either side of a sample that its in and out chords reach."
+                  title="Screen px of arc length either side of a sample that its in and out chords reach."
                   min={0}
-                  max={4}
-                  step={0.05}
+                  max={32}
+                  step={0.5}
                   value={s.cornerArm}
                   onInput={(cornerArm) => set({ cornerArm })}
-                />
-                <Knob
-                  label="ratio"
-                  title="out chord / in chord at or above this is a corner"
-                  min={1}
-                  max={20}
-                  step={0.25}
-                  value={s.cornerRatio}
-                  onInput={(cornerRatio) => set({ cornerRatio })}
                 />
                 <Knob
                   label="min turn°"
@@ -1518,9 +1379,6 @@ export function CenterlinePage() {
                   value={s.cornerTurn}
                   onInput={(cornerTurn) => set({ cornerTurn })}
                 />
-                <p class="note">
-                  honoured by average smoothing, dropping, and the hand fit
-                </p>
                 <Check
                   label="inspect"
                   value={s.cornerDebug}
@@ -1536,99 +1394,41 @@ export function CenterlinePage() {
           </Section>
 
           <Section title="smoothing">
-            <Pick
-              options={SMOOTH_KINDS}
-              value={s.smooth}
-              onPick={(smooth) => set({ smooth })}
+            <Knob
+              label="window"
+              title="Screen px of arc length either side of a point averaged into it (smoothPositions). 0 is off. Shrinks toward the ends so they pass through."
+              min={0}
+              max={16}
+              step={0.5}
+              value={s.smoothWindow}
+              onInput={(smoothWindow) => set({ smoothWindow })}
             />
-            {s.smooth === "average" && (
-              <Knob
-                label="window"
-                title="× max width of arc length either side of a point averaged into it (smoothPositions). Shrinks toward the ends and corners so they pass through."
-                min={0}
-                max={2}
-                step={0.05}
-                value={s.smoothWindow}
-                onInput={(smoothWindow) => set({ smoothWindow })}
-              />
-            )}
-            <Check label="drop contained discs" value={s.drop} onInput={(drop) => set({ drop })} />
           </Section>
 
           <Section title="fit">
-            <Pick
-              options={FIT_KINDS}
-              value={s.fit}
-              onPick={(fit) => set({ fit })}
+            <Knob
+              label="tol"
+              title="Screen px a sample may lie off the segment that skips it."
+              min={0}
+              max={8}
+              step={0.05}
+              value={s.handTol}
+              onInput={(handTol) => set({ handTol })}
             />
-            {(s.fit === "cubic" || s.fit === "hand") && (
-              <Knob
-                label="tol"
-                title="Ink a segment may gain where a sample is dropped, as a fraction of local r."
-                min={0}
-                max={1}
-                step={0.01}
-                value={s.fitTol}
-                onInput={(fitTol) => set({ fitTol })}
-              />
-            )}
-            {/* the hand fit reads none of these: its corners come from the corners stage */}
-            {s.fit === "cubic" && (
-              <>
-                <Knob
-                  label="corner°"
-                  title="A turn sharper than this over the window is a corner. 181 is off."
-                  min={10}
-                  max={181}
-                  step={1}
-                  value={s.fitCornerAngle}
-                  onInput={(fitCornerAngle) => set({ fitCornerAngle })}
-                />
-                <Knob
-                  label="window"
-                  title="× max width either side of a sample that turn, tangent and radius slope are read over."
-                  min={0}
-                  max={4}
-                  step={0.05}
-                  value={s.fitWindow}
-                  onInput={(fitWindow) => set({ fitWindow })}
-                />
-                <Knob
-                  label="horizon"
-                  title="× max width a segment may span before it commits regardless."
-                  min={0.5}
-                  max={20}
-                  step={0.5}
-                  value={s.fitHorizon}
-                  onInput={(fitHorizon) => set({ fitHorizon })}
-                />
-              </>
-            )}
-            {s.fit === "cubic" && (
-              <Check
-                label="incremental (resume from last frame)"
-                value={s.incremental}
-                onInput={(incremental) => set({ incremental })}
-              />
-            )}
-            {s.fit === "hand" && (
-              <Knob
-                label="reparam"
-                title="Rounds of: move each sample's u to the nearest point on the curve, then solve the lengths again. 0 is one solve at the arc-length guesses."
-                min={0}
-                max={10}
-                step={1}
-                value={s.reparam}
-                onInput={(reparam) => set({ reparam })}
-              />
-            )}
-            {s.fit === "hand" && (
-              <Check
-                label="hold back last sample while open"
-                value={s.holdBack}
-                onInput={(holdBack) => set({ holdBack })}
-              />
-            )}
+            <Knob
+              label="reparam"
+              title="Rounds of: move each sample's u to the nearest point on the curve, then solve the lengths again. 0 is one solve at the arc-length guesses."
+              min={0}
+              max={10}
+              step={1}
+              value={s.reparam}
+              onInput={(reparam) => set({ reparam })}
+            />
+            <Check
+              label="hold back last sample while open"
+              value={s.holdBack}
+              onInput={(holdBack) => set({ holdBack })}
+            />
           </Section>
 
           <Section title="layers">
@@ -1728,13 +1528,11 @@ export function CenterlinePage() {
                     </td>
                   </tr>
                 )}
-                <tr title="points the fit is given, and how many contained discs were dropped on the way">
-                  <th>fit input</th>
+                <tr title="samples kept by stage 0 -- the one filter -- of those fed; every stage after keeps them all">
+                  <th>kept</th>
                   <td>
                     {input.length}
-                    {s.drop && (
-                      <span class="dim"> ({frame.radius.length - input.length} dropped)</span>
-                    )}
+                    <span class="dim"> of {fed}</span>
                   </td>
                 </tr>
                 {s.corners && (
@@ -1787,49 +1585,12 @@ export function CenterlinePage() {
                     </td>
                   </tr>
                 )}
-                {frame.fresh !== null && (
-                  <tr title="nodes taken over from the previous frame's fit instead of refitted, and whether the output is identical to a fresh fit">
-                    <th>reused</th>
-                    <td>
-                      {frame.reused}/{cubics.length + 1}{" "}
-                      {frame.fresh.same ? (
-                        <span class="dim">= fresh</span>
-                      ) : (
-                        <span class="warn">≠ fresh</span>
-                      )}
-                    </td>
-                  </tr>
-                )}
-                <tr title="mean ms per call, for the stages that are on">
+                <tr title="mean ms per call: stages 0-3, then the fit">
                   <th>ms</th>
                   <td>
-                    <span class="dim">radius</span> {fmt(frame.tRadius, 3)}
-                    {s.corners && (
-                      <>
-                        <br />
-                        <span class="dim">corners</span> {fmt(frame.tCorner, 3)}
-                      </>
-                    )}
-                    {s.smooth !== "none" && (
-                      <>
-                        <br />
-                        <span class="dim">smooth</span> {fmt(frame.tSmooth, 3)}
-                      </>
-                    )}
-                    {s.drop && (
-                      <>
-                        <br />
-                        <span class="dim">drop</span> {fmt(frame.tDrop, 3)}
-                      </>
-                    )}
+                    <span class="dim">centerline</span> {fmt(frame.tCenterline, 3)}
                     <br />
                     <span class="dim">fit</span> {fmt(frame.tFit, 3)}
-                    {frame.fresh !== null && (
-                      <>
-                        {" "}
-                        <span class="dim">fresh</span> {fmt(frame.fresh.ms, 3)}
-                      </>
-                    )}
                   </td>
                 </tr>
               </tbody>

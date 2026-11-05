@@ -13,7 +13,7 @@ export function Controls() {
   async function handleImport(file: File) {
     const text = await file.text();
     const imported = deserialize(text);
-    const lastT = imported.reduce((m, st) => st.reduce((mm, pt) => Math.max(mm, pt.t), m), 0);
+    const lastT = imported.reduce((m, st) => st.points.reduce((mm, pt) => Math.max(mm, pt.t), m), 0);
     clock.seek(lastT); // park at the imported end so recording continues from there
     setStrategies(getDefaultStrategies());
     store.replace(imported);

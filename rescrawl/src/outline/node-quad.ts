@@ -25,8 +25,8 @@ import { contactAt, type OutlineNode, wrapZeroTau } from "./contact.ts";
 // two can be compared without moving each other. See `pipeline.ts`.
 
 export type NodeQuadOptions = {
-  maxWidth?: number; // width at a standstill; the unit `quadTol` is measured in
-  quadTol?: number; // × maxWidth the drawn outline may stray from the envelope
+  maxWidth?: number; // width at a standstill; the unit SAME is measured in
+  quadTol?: number; // px the drawn outline may stray from the envelope
   quadDepth?: number; // midpoint splits one centerline segment may take per side
 };
 
@@ -115,7 +115,7 @@ export function toOutlineNodeQuad(
     return { x: c.x + c.r * ex, y: c.y + c.r * ey, tx, ty };
   };
 
-  const tol2 = o.quadTol * o.quadTol * o.maxWidth * o.maxWidth;
+  const tol2 = o.quadTol * o.quadTol;
   const maxDepth = Math.max(0, Math.round(o.quadDepth));
   const same = SAME * o.maxWidth;
 

@@ -1,7 +1,6 @@
 import { getStroke } from "perfect-freehand";
 import type {
   CenterlineNode,
-  FitKind,
   OutlineKind,
   OutlineNode,
   Point4,
@@ -10,7 +9,7 @@ import type {
 } from "rescrawl";
 import { centerlineStages, RENDER_DEFAULTS, renderStroke } from "rescrawl";
 import { fitPath, outlinePath, outlineQuadPath } from "rescrawl/svg";
-import type { Stroke } from "./utils";
+import type { Point, Stroke } from "./utils";
 import { elapsedPoints } from "./utils";
 
 // A renderer turns one stroke's raw data into a renderable line. When `shapes`
@@ -24,7 +23,7 @@ export type RenderedLine = {
 };
 
 // A purely-geometric drawer: given the points to draw, produce the line.
-type Draw = (pts: Stroke, param: number) => RenderedLine;
+type Draw = (pts: Point[], param: number) => RenderedLine;
 
 export type StrategyDef = {
   id: string;
@@ -47,23 +46,23 @@ export type StrategiesState = Record<string, StrategyState>;
 // pipeline's stages, drawn as dots at the points that stage produced — turning
 // two of them on side by side is what shows you what that stage did. The rest
 // are derived geometry.
-export type StageKey = keyof StrokeStages;
+export type StageKey = Exclude<keyof StrokeStages, "prefixSum">;
 // Derived geometry, drawn from a stage rather than being one: what the fit
 // shaped (`centerline`, `handles`) and what was laid around it (`outline`).
 export type ExtraKey = "centerline" | "handles" | "outline";
 export type DebugLayers = Record<StageKey | ExtraKey, boolean>;
 
-// `dot` is a fixed marker size in px, and only `raw` carries no radius of its
-// own. From `radius` on, a stage draws each point at its own r: that circle is
+// `dot` is a fixed marker size in px, and `raw`, `smoothed` and `retimed` carry
+// no radius of their own. From `radius` on, a stage draws each point at its own r: that circle is
 // what the outline is wrapped around, so two stages side by side compare the
 // ink they would actually lay down rather than two arbitrary dots.
 export type StageLayer = { key: StageKey; label: string; color: string; dot?: number };
 export const DEBUG_STAGES: StageLayer[] = [
   { key: "raw", label: "in · raw input", color: "#10b981", dot: 3.6 },
-  { key: "radius", label: "1 · radius", color: "#eab308" },
-  { key: "smoothed", label: "2 · smoothed", color: "#f97316" },
-  { key: "distinct", label: "3 · distinct", color: "#a855f7" },
-  { key: "nodes", label: "4 · nodes", color: "#3b82f6" },
+  { key: "smoothed", label: "0 · smoothed", color: "#f97316", dot: 3.2 },
+  { key: "retimed", label: "1 · retimed", color: "#64748b", dot: 2.8 },
+  { key: "radius", label: "2 · radius", color: "#eab308" },
+  { key: "nodes", label: "3 · nodes", color: "#3b82f6" },
 ];
 
 export type ExtraLayer = {
@@ -80,17 +79,16 @@ export const HANDLE_COLOR = "#ec4899";
 // In pipeline order, like the stages above: the fit's spine and the control
 // points it solved for, then the outline laid around them.
 export const DEBUG_EXTRAS: ExtraLayer[] = [
-  { key: "centerline", label: "4 · centerline nodes", color: CENTERLINE_COLOR },
-  { key: "handles", label: "4 · curve handles", color: HANDLE_COLOR },
+  { key: "centerline", label: "3 · centerline nodes", color: CENTERLINE_COLOR },
+  { key: "handles", label: "3 · curve handles", color: HANDLE_COLOR },
   { key: "outline", label: "4 · outline pts", color: "#ef4444" },
 ];
 
 // One stage point picked out of the overlay, for the radius readout. `dt` is the
 // gap to the next point of that stage — and on its last point, the gap to where
-// the stroke itself ends, which is not the same place: every stage from `radius`
-// on stops one raw sample early (see `toRadiiPointsFromRawSamples`), so the final
-// gap is the pen-up dwell rather than nothing. Note that a stage drops points, so
-// dt is the span the surviving point now covers, not the raw sample period.
+// the stroke itself ends: the pen-up dwell, which the last point holds as its
+// `tEnd` (see `retime`). Note that a stage drops points, so dt is the span the
+// surviving point now covers, not the raw sample period.
 export type StagePick = {
   x: number;
   y: number;
@@ -153,9 +151,9 @@ export function pickStagePoint(
 // Everything between is opt-in, or the overlay is unreadable.
 export const DEBUG_DEFAULTS: DebugLayers = {
   raw: true,
+  retimed: false,
   radius: false,
   smoothed: false,
-  distinct: false,
   nodes: true,
   centerline: false,
   handles: false,
@@ -278,13 +276,11 @@ export const INK_COLOR = "#1a1a1a";
 export type OutlineMode = OutlineKind | "freehand";
 export type FreehandPressure = "simulate" | "radius";
 
-// Every choice the two selects offer. Listed rather than derived so each reads
-// next to its own select below, and so a stored blob can be checked against
-// them: options are persisted to localStorage, and one saved before a fit or an
-// outline was removed still names it. An unknown name would index `FITS` or
-// `OUTLINES` to undefined and throw on the first render, so it falls back to
-// the default instead.
-const FIT_KINDS: FitKind[] = ["cubic"];
+// Every choice the outline select offers. Listed rather than derived so it reads
+// next to its select below, and so a stored blob can be checked against it:
+// options are persisted to localStorage, and one saved before an outline was
+// removed still names it. An unknown name would index `OUTLINES` to undefined
+// and throw on the first render, so it falls back to the default instead.
 const OUTLINE_MODES: OutlineMode[] = ["greedy", "node-fit", "node-quad", "freehand"];
 
 // Which outline emits contacts meant to be joined by quadratics. The library
@@ -294,17 +290,16 @@ const outlinePathFor = (o: InkOptions, outline: OutlineNode[]): string =>
   o.outline === "node-quad" ? outlineQuadPath(outline) : outlinePath(outline);
 
 export function withKnownModes(o: InkOptions): InkOptions {
-  const fit = FIT_KINDS.includes(o.fit) ? o.fit : INK_DEFAULTS.fit;
   const outline = OUTLINE_MODES.includes(o.outline) ? o.outline : INK_DEFAULTS.outline;
-  return fit === o.fit && outline === o.outline ? o : { ...o, fit, outline };
+  return outline === o.outline ? o : { ...o, outline };
 }
 
-// Every length in stage 4 changed from a pixel count to a multiple of the pen
-// at once, and `engine` has since split into `fit` and `outline`. A blob saved
+// Every length moved to screen px at once (some had been a multiple of the
+// pen), and `engine` had split into `fit` and `outline`. A blob saved
 // under an older meaning would be wrong, and for several knobs an old value is
 // indistinguishable from a new one, so the key is versioned and stale panel
 // settings are dropped. Strokes are stored separately and are unaffected.
-export const INK_STORAGE_KEY = "rescrawl-ink-3";
+export const INK_STORAGE_KEY = "rescrawl-ink-4";
 
 // perfect-freehand's knobs, prefixed so they can share one options object with
 // rescrawl's. `size` is not here: it is `maxWidth`, so both engines draw the
@@ -333,8 +328,10 @@ export const INK_DEFAULTS: InkOptions = {
 
 // What rescrawl gets, with the website-only mode folded back to an outline the
 // library knows. Freehand brings its own, so which one is named is moot.
-function toRenderOptions(o: InkOptions): Required<RenderOptions> {
-  return { ...o, outline: o.outline === "freehand" ? "greedy" : o.outline };
+//
+// `zoom` is the stroke's own, as it was drawn.
+function toRenderOptions(o: InkOptions, zoom: number): Required<RenderOptions> {
+  return { ...o, zoom, outline: o.outline === "freehand" ? "greedy" : o.outline };
 }
 
 // perfect-freehand's radius is size · (0.5 − thinning · (0.5 − pressure)), so
@@ -376,14 +373,14 @@ const asNode = (p: Point4): CenterlineNode => ({
   slope: 0,
 });
 
-// perfect-freehand gets the discs as stage 3 left them and nothing else: no
+// perfect-freehand gets the discs as stage 2 left them and nothing else: no
 // fit runs. It has its own `streamline` and `smoothing`, and thinning the
 // centerline first would be two such passes stacked, which is not the thing
-// being compared. So `nodes` here is just `distinct` — the overlay's nodes layer
-// shows no drop in this mode.
-function renderFreehand(pts: Stroke, o: InkOptions): Freehand {
-  const pre = centerlineStages(pts, toRenderOptions(o));
-  const stages: StrokeStages = { ...pre, nodes: pre.distinct.map(asNode) };
+// being compared. So `nodes` here is just `radius` — the overlay's nodes
+// layer shows no fit in this mode.
+function renderFreehand(pts: Point[], o: InkOptions, zoom: number): Freehand {
+  const pre = centerlineStages(pts, toRenderOptions(o, zoom));
+  const stages: StrokeStages = { ...pre, nodes: pre.radius.map(asNode) };
   const simulate = o.fhPressure === "simulate";
   const input = simulate
     ? stages.nodes
@@ -405,9 +402,9 @@ export function renderInk(stroke: Stroke, options: InkOptions, t: number): Rende
   const pts = elapsedPoints(stroke, t);
   if (!pts.length) return EMPTY;
   if (options.outline === "freehand") {
-    return { shapes: [polygonPath(renderFreehand(pts, options).polygon)] };
+    return { shapes: [polygonPath(renderFreehand(pts, options, stroke.zoom).polygon)] };
   }
-  const { outline } = renderStroke(pts, toRenderOptions(options));
+  const { outline } = renderStroke(pts, toRenderOptions(options, stroke.zoom));
   return { shapes: [outlinePathFor(options, outline)] };
 }
 
@@ -422,11 +419,11 @@ export function inkStages(
 ): { outline: OutlineNode[]; stages: StrokeStages } {
   const pts = elapsedPoints(stroke, t);
   if (options.outline === "freehand") {
-    const { stages, polygon } = renderFreehand(pts, options);
+    const { stages, polygon } = renderFreehand(pts, options, stroke.zoom);
     const outline = polygon.map(([x, y]) => ({ x, y, tx: 0, ty: 0 }));
     return { outline, stages };
   }
-  const { stages, outline } = renderStroke(pts, toRenderOptions(options));
+  const { stages, outline } = renderStroke(pts, toRenderOptions(options, stroke.zoom));
   return { outline, stages };
 }
 
@@ -434,8 +431,8 @@ export function inkStages(
 // makes, without the outline the overlay needs and a hit test does not.
 export function strokeStages(stroke: Stroke, options: InkOptions, t: number): StrokeStages {
   const pts = elapsedPoints(stroke, t);
-  if (options.outline === "freehand") return renderFreehand(pts, options).stages;
-  return renderStroke(pts, toRenderOptions(options)).stages;
+  if (options.outline === "freehand") return renderFreehand(pts, options, stroke.zoom).stages;
+  return renderStroke(pts, toRenderOptions(options, stroke.zoom)).stages;
 }
 
 // Split the option keys by value type so a slider can only ever be pointed at a
@@ -482,6 +479,8 @@ const ifRescrawl = (o: InkOptions) => !ifFreehand(o);
 const ifGreedy = (o: InkOptions) => o.outline === "greedy";
 const ifNodeFit = (o: InkOptions) => o.outline === "node-fit";
 const ifNodeQuad = (o: InkOptions) => o.outline === "node-quad";
+// node-fit and node-quad switch the corners stage off (see `renderStroke`).
+const ifCorners = (o: InkOptions) => ifGreedy(o) && o.corners;
 
 export const INK_SECTIONS: InkSection[] = [
   {
@@ -493,7 +492,7 @@ export const INK_SECTIONS: InkSection[] = [
       {
         kind: "range",
         key: "thinSpeed",
-        label: "thin speed (px/ms)",
+        label: "thin speed (screen px/ms)",
         min: 0.05,
         max: 4,
         step: 0.05,
@@ -502,29 +501,60 @@ export const INK_SECTIONS: InkSection[] = [
     ],
   },
   {
-    // Stage 2, off by default. Stage 1 already smooths the radius and the fit
-    // absorbs most position noise, so this is for input that is visibly noisy.
-    // No `when`: freehand takes its discs from stage 3, so this reaches it too.
+    // Stages 0 to 2, before the fit. No `when`: freehand takes its discs from
+    // stage 2, so these reach it too.
     label: "Centerline",
     items: [
+      // Stage 0, the one filter: a sample this close to the last one kept is
+      // the pen not having moved, in screen px at the zoom the stroke was drawn at.
+      {
+        kind: "range",
+        key: "minMove",
+        label: "min move (screen px)",
+        min: 0,
+        max: 6,
+        step: 0.1,
+      },
+      // Stage 0, off by default: dense stretches pulled, sparse ones barely
+      // touched. For input that is visibly noisy.
       {
         kind: "range",
         key: "smoothWindow",
-        label: "smooth window (× pen)",
+        label: "smooth window (screen px)",
         min: 0,
-        max: 2,
-        step: 0.05,
+        max: 16,
+        step: 0.5,
+      },
+      // Stage 2's corners. Only the greedy outline can draw one.
+      { kind: "toggle", key: "corners", label: "corners", when: ifGreedy },
+      {
+        kind: "range",
+        key: "cornerArm",
+        label: "corner arm (screen px)",
+        min: 0,
+        max: 32,
+        step: 0.5,
+        when: ifCorners,
+      },
+      {
+        kind: "range",
+        key: "cornerTurn",
+        label: "corner turn (deg)",
+        min: 0,
+        max: 180,
+        step: 1,
+        when: ifCorners,
       },
     ],
   },
   {
-    // Stages 4 and 5 — the fit, and the outline laid around it — so their
+    // Stages 3 and 4 — the fit, and the outline laid around it — so their
     // knobs live under them. Freehand is the odd one out: it takes the discs
-    // straight from stage 3 and brings its own everything, so none of
+    // straight from stage 2 and brings its own everything, so none of
     // rescrawl's knobs apply to it.
     label: "Fit & outline",
     items: [
-      // Stage 5. Freehand stands where an outline would, and takes stage 3
+      // Stage 4. Freehand stands where an outline would, and takes stage 2
       // rather than a fit, so it is a choice here rather than its own select.
       {
         kind: "select",
@@ -537,59 +567,24 @@ export const INK_SECTIONS: InkSection[] = [
           { value: "freehand", label: "perfect-freehand" },
         ],
       },
-      // Stage 4: which discs become nodes, and what joins two of them. Every
-      // outline above is drawn around whichever is picked here.
-      {
-        kind: "select",
-        key: "fit",
-        label: "fit",
-        choices: [
-          { value: "cubic", label: "cubic — magnitudes least-squared to the samples" },
-        ],
-        when: ifRescrawl,
-      },
-      // How far the ink may move where a sample is dropped, as a fraction of
-      // the local radius. 0 is lossless and drops almost nothing.
+      // Stage 3: which discs become nodes, and what joins two of them.
       {
         kind: "range",
-        key: "fitTol",
-        label: "fit tol (xr)",
+        key: "reparam",
+        label: "reparam (rounds)",
         min: 0,
-        max: 1,
-        step: 0.01,
-        when: ifRescrawl,
-      },
-      // A turn sharper than the angle, measured over `fitWindow` either side,
-      // is a corner; that window is also what the tangent and the radius slope
-      // are read over. See `fitCurve`.
-      {
-        kind: "range",
-        key: "fitCornerAngle",
-        label: "fit corner angle (deg)",
-        min: 10,
-        max: 180,
+        max: 10,
         step: 1,
-        when: ifGreedy,
-      },
-      {
-        kind: "range",
-        key: "fitWindow",
-        label: "fit window (× pen)",
-        min: 0.1,
-        max: 5,
-        step: 0.05,
         when: ifRescrawl,
       },
-      // How far one segment may run before it commits anyway. The open
-      // segment is the only committed-looking ink that still moves, so this
-      // bounds how far behind the pen anything can change; larger is sparser.
+      // How far a sample may lie off the segment that skips it.
       {
         kind: "range",
-        key: "fitHorizon",
-        label: "fit horizon (× pen)",
-        min: 0.5,
-        max: 50,
-        step: 0.25,
+        key: "handTol",
+        label: "hand tol (screen px)",
+        min: 0,
+        max: 8,
+        step: 0.05,
         when: ifRescrawl,
       },
       // How far the drawn outline may stray from the true envelope: contacts
@@ -597,23 +592,23 @@ export const INK_SECTIONS: InkSection[] = [
       {
         kind: "range",
         key: "outlineTol",
-        label: "outline tol (× pen)",
-        min: 0.005,
-        max: 0.25,
-        step: 0.005,
+        label: "outline tol (screen px)",
+        min: 0.04,
+        max: 2,
+        step: 0.01,
         when: ifGreedy,
       },
       // How far one hop may span, whatever the tolerance would have allowed.
-      // The outline's answer to `fitHorizon`: a long hop reaching into the
+      // A long hop reaching into the
       // unsettled ink at the pen re-decides every frame and re-anchors every
       // hop behind it, so this bounds how far back the churn reaches.
       {
         kind: "range",
         key: "outlineHorizon",
-        label: "outline horizon (× pen)",
-        min: 0.5,
-        max: 20,
-        step: 0.25,
+        label: "outline horizon (screen px)",
+        min: 4,
+        max: 160,
+        step: 2,
         when: ifGreedy,
       },
       // --- node fit ---
@@ -624,10 +619,10 @@ export const INK_SECTIONS: InkSection[] = [
       {
         kind: "range",
         key: "nodeTol",
-        label: "node tol (× pen)",
-        min: 0.005,
-        max: 0.25,
-        step: 0.005,
+        label: "node tol (screen px)",
+        min: 0.04,
+        max: 2,
+        step: 0.01,
         when: ifNodeFit,
       },
       // The floor under that: at a cusp on the inner offset the error never
@@ -649,10 +644,10 @@ export const INK_SECTIONS: InkSection[] = [
       {
         kind: "range",
         key: "quadTol",
-        label: "quad tol (× pen)",
-        min: 0.005,
-        max: 0.25,
-        step: 0.005,
+        label: "quad tol (screen px)",
+        min: 0.04,
+        max: 2,
+        step: 0.01,
         when: ifNodeQuad,
       },
       {

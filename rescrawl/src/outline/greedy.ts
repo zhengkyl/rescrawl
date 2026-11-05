@@ -2,7 +2,7 @@ import { basis, type CenterlineNode } from "../centerline/fit.ts";
 import { chordRule, clamp11, dist, type Point4, wrapPi } from "../math.ts";
 import { contactAt, discLoop, type OutlineNode, wrapZeroTau } from "./contact.ts";
 
-// Nodes from `fitCurve`, then the outline sampled densely once round and
+// Nodes from `fitHand`, then the outline sampled densely once round and
 // walked greedily: a contact only where the cubic that would otherwise be drawn
 // strays more than `outlineTol` from those samples.
 //
@@ -16,9 +16,9 @@ import { contactAt, discLoop, type OutlineNode, wrapZeroTau } from "./contact.ts
 // two can be compared without moving each other. See `pipeline.ts`.
 
 export type GreedyOptions = {
-  maxWidth?: number; // width at a standstill; the unit the lengths below are measured in
-  outlineTol?: number; // × maxWidth the drawn outline may stray from the envelope
-  outlineHorizon?: number; // × maxWidth one outline hop may span
+  maxWidth?: number; // width at a standstill; the unit FINE_STEP and SAME are measured in
+  outlineTol?: number; // px the drawn outline may stray from the envelope
+  outlineHorizon?: number; // px one outline hop may span
 };
 
 // Below this the node's tangents agree to within noise: not a corner.
@@ -164,14 +164,14 @@ export function toOutlineGreedy(ns: CenterlineNode[], o: Required<GreedyOptions>
   for (let i = 1; i <= N; i++) S[i] = S[i - 1] + dist(seq[i - 1], seq[i]);
 
   // Does the chord-rule cubic a..b pass within `tol` of every sample between?
-  // Two Newton steps per sample, as `fitCurve` does on the centerline.
-  const tol2 = o.outlineTol * o.outlineTol * o.maxWidth * o.maxWidth;
+  // Two Newton steps per sample.
+  const tol2 = o.outlineTol * o.outlineTol;
 
-  // The outline's `fitHorizon`. Uncapped, one cubic swallowed 32px of outline
+  // Uncapped, one cubic swallowed 32px of outline
   // where a fixed-step engine placed a contact every 4.6px -- and a long hop
   // reaching into the unsettled ink at the pen re-decides every frame and
   // re-anchors every hop behind it, dragging churn ~40px back.
-  const hopMax = o.outlineHorizon * o.maxWidth;
+  const hopMax = o.outlineHorizon;
   const covers = (a: number, b: number): boolean => {
     const A = seq[a];
     const B = seq[b];
@@ -210,7 +210,7 @@ export function toOutlineGreedy(ns: CenterlineNode[], o: Required<GreedyOptions>
   // so both walks start there and run outward to meet in the end cap. Walking
   // once round instead would cross the cap at the pen and re-anchor the whole
   // back side every frame. (Measured, this is not what limits settling --
-  // `fitCurve` revising the open segment is.)
+  // `fitHand` revising the open segment is.)
   const meet = Math.max(capLo, Math.min(capHi, (capLo + capHi) >> 1));
   const cuts = [...cut].filter((i) => i > 0 && i < N).sort((a, b) => a - b);
   // [lo, hi] chopped at the folds inside it: a hop may not reach across one.

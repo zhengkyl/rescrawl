@@ -30,8 +30,8 @@ import {
 // two can be compared without moving each other. See `pipeline.ts`.
 
 export type NodeFitOptions = {
-  maxWidth?: number; // width at a standstill; the unit `nodeTol` is measured in
-  nodeTol?: number; // × maxWidth the drawn outline may stray from the envelope
+  maxWidth?: number; // width at a standstill; the unit SAME is measured in
+  nodeTol?: number; // px the drawn outline may stray from the envelope
   nodeDepth?: number; // midpoint splits one centerline segment may take per side
 };
 
@@ -103,7 +103,7 @@ export function toOutlineNodeFit(ns: CenterlineNode[], o: Required<NodeFitOption
     return { x: c.x + c.r * ex, y: c.y + c.r * ey, tx, ty };
   };
 
-  const tol2 = o.nodeTol * o.nodeTol * o.maxWidth * o.maxWidth;
+  const tol2 = o.nodeTol * o.nodeTol;
   const maxDepth = Math.max(0, Math.round(o.nodeDepth));
   const same = SAME * o.maxWidth;
 

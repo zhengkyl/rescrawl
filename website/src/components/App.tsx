@@ -1,7 +1,7 @@
 import type { ReadonlySignal, Signal } from "@preact/signals";
 import { computed, useSignal } from "@preact/signals";
 import { useEffect, useMemo, useRef } from "preact/hooks";
-import type { CenterlineNode } from "rescrawl";
+import { type CenterlineNode, holdEndUntil } from "rescrawl";
 import { useApp } from "../context";
 import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from "../curves";
 import {
@@ -113,7 +113,7 @@ type HoverPick = StagePick & { sx: number; sy: number };
 // in front of the hover hit test: a move over empty canvas costs a scan of
 // coordinates instead of a run of the pipeline.
 function nearCursor(s: Stroke, x: number, y: number, pad: number): boolean {
-  for (const p of s) if (Math.abs(p.x - x) < pad && Math.abs(p.y - y) < pad) return true;
+  for (const p of s.points) if (Math.abs(p.x - x) < pad && Math.abs(p.y - y) < pad) return true;
   return false;
 }
 
@@ -414,20 +414,21 @@ export function App() {
     const now = clock.getElapsedFromTs(e.timeStamp);
     hover.value = null;
     clock.penDown(now);
-    currentStrokeRef.current = [{ x: pt.x, y: pt.y, t: now }];
+    // The view's zoom as the pen goes down: the stroke keeps it, whatever the
+    // view does after.
+    currentStrokeRef.current = { points: [{ x: pt.x, y: pt.y, t: now }], zoom: view.zoom.peek() };
     drawFrame(); // renders the live stroke + starts the dwell loop
   }
 
   // While the pointer is down, re-render the in-progress stroke every frame with
-  // a trailing "tip" point at (last position, now).
+  // the pen held where it is until now.
   function drawFrame() {
     const rec = currentStrokeRef.current;
     if (rec === null) {
       drawLoopRef.current = null;
       return;
     }
-    const last = rec[rec.length - 1];
-    livePoints.value = [...rec, { x: last.x, y: last.y, t: clock.getElapsed() }];
+    livePoints.value = { ...rec, points: holdEndUntil(rec.points, clock.getElapsed()) };
     drawLoopRef.current = requestAnimationFrame(drawFrame);
   }
 
@@ -439,12 +440,8 @@ export function App() {
     }
 
     const pt = view.svgToContent(e.clientX, e.clientY);
-    const last = rec[rec.length - 1];
-    // ignore non-movement updates (e.g. pens)
-    if (pt.x === last.x && pt.y === last.y) return;
-
     const t = clock.getElapsedFromTs(e.timeStamp);
-    rec.push({ x: pt.x, y: pt.y, t });
+    rec.points.push({ x: pt.x, y: pt.y, t });
   }
 
   function commitStroke(e: PointerEvent) {
@@ -454,12 +451,9 @@ export function App() {
       cancelAnimationFrame(drawLoopRef.current);
       drawLoopRef.current = null;
     }
-    // Capture the pointer-up point (final position + release time) so every
-    // stroke has >= 2 points and the end dwell is recorded.
+    // The pen held until release, so the end dwell is recorded.
     const now = clock.getElapsedFromTs(e.timeStamp);
-
-    const last = rec[rec.length - 1];
-    const stroke: Stroke = [...rec, { x: last.x, y: last.y, t: now }];
+    const stroke: Stroke = { ...rec, points: holdEndUntil(rec.points, now) };
     currentStrokeRef.current = null;
     livePoints.value = null;
     store.append(stroke);
@@ -485,7 +479,7 @@ export function App() {
     const rect = view.svgRef.current!.getBoundingClientRect();
     let best: HoverPick | null = null;
     for (const s of strokes) {
-      if (s[0].t > t || !nearCursor(s, x, y, pad)) continue;
+      if (s.points[0].t > t || !nearCursor(s, x, y, pad)) continue;
       const hit = pickStagePoint(strokeStages(s, inkOptions, t), debug, x, y, reach);
       if (hit === null) continue;
       // Every later stroke now has to beat this one to take the readout.

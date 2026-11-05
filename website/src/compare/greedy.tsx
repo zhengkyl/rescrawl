@@ -3,8 +3,8 @@ import { RENDER_DEFAULTS, renderStroke } from "rescrawl";
 import { outlinePath } from "rescrawl/svg";
 import { GroupLabel, Slider } from "./controls";
 
-// rescrawl's own pipeline in full (radius from speed, smoothing, distinct
-// discs, the cubic fit, the greedy outline) with every knob it takes.
+// rescrawl's own pipeline in full (smoothing, retime, radius from speed, the
+// fit, the greedy outline) with every knob it takes.
 
 type Stroke = Point3[];
 
@@ -12,7 +12,6 @@ export type GreedyOptions = Required<RenderOptions>;
 
 export const GREEDY_DEFAULTS: GreedyOptions = {
   ...RENDER_DEFAULTS,
-  fit: "cubic",
   outline: "greedy",
 };
 
@@ -21,7 +20,7 @@ export function greedyPath(stroke: Stroke, o: GreedyOptions): string {
   return outlinePath(renderStroke(stroke, o).outline);
 }
 
-// Numeric knobs only — the fit and the outline are pinned on this canvas.
+// Numeric knobs only — the outline is pinned on this canvas.
 type NumberKey = {
   [K in keyof GreedyOptions]-?: GreedyOptions[K] extends number ? K : never;
 }[keyof GreedyOptions];
@@ -55,7 +54,7 @@ export function GreedySettings({
         onInput={set("maxWidth")}
       />
       <Slider
-        label="thin speed (px/ms)"
+        label="thin speed (screen px/ms)"
         value={options.thinSpeed}
         min={0.05}
         max={4}
@@ -73,63 +72,47 @@ export function GreedySettings({
 
       <GroupLabel>Centerline</GroupLabel>
       <Slider
-        label="smooth window (x pen)"
+        label="smooth window (screen px)"
         value={options.smoothWindow}
         min={0}
-        max={2}
-        step={0.05}
+        max={16}
+        step={0.5}
         onInput={set("smoothWindow")}
       />
 
       <GroupLabel>Fit</GroupLabel>
       <Slider
-        label="fit tol (xr)"
-        value={options.fitTol}
+        label="hand tol (screen px)"
+        value={options.handTol}
         min={0}
-        max={1}
-        step={0.01}
-        onInput={set("fitTol")}
-      />
-      <Slider
-        label="corner angle (deg)"
-        value={options.fitCornerAngle}
-        min={10}
-        max={180}
-        step={1}
-        onInput={set("fitCornerAngle")}
-      />
-      <Slider
-        label="fit window (x pen)"
-        value={options.fitWindow}
-        min={0.1}
-        max={5}
+        max={8}
         step={0.05}
-        onInput={set("fitWindow")}
+        onInput={set("handTol")}
       />
       <Slider
-        label="fit horizon (x pen)"
-        value={options.fitHorizon}
-        min={0.5}
-        max={50}
-        step={0.25}
-        onInput={set("fitHorizon")}
+        label="reparam (rounds)"
+        value={options.reparam}
+        min={0}
+        max={10}
+        step={1}
+        onInput={set("reparam")}
       />
 
       <GroupLabel>Outline</GroupLabel>
       <Slider
-        label="outline tol (x pen)"
+        label="outline tol (screen px)"
         value={options.outlineTol}
-        min={0.005}
-        max={0.25}
-        step={0.005}
+        min={0.04}
+        max={2}
+        step={0.01}
         onInput={set("outlineTol")}
       />
       <Slider
-        label="outline horizon (x pen)"
+        label="outline horizon (screen px)"
         value={options.outlineHorizon}
-        min={0.5}
-        max={20}
-        step={0.25}
+        min={4}
+        max={160}
+        step={2}
         onInput={set("outlineHorizon")}
       />
     </>
