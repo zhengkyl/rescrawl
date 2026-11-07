@@ -1,5 +1,5 @@
-import { chordRule, dist, quadControl } from "./math.ts";
-import type { CenterlineNode } from "./centerline/fit.ts";
+import { quadControl } from "./math.ts";
+import type { CubicNode } from "./centerline/fit.ts";
 import type { Point2 } from "./math.ts";
 import type { OutlineNode } from "./outline/contact.ts";
 
@@ -34,6 +34,8 @@ class Pen {
   private cx = 0; // current point as the PARSER will compute it
   private cy = 0;
   private cmd = ""; // last command letter written, for implied repeats
+  private sx = 0; // subpath start, where `z` leaves the parser
+  private sy = 0;
   private qx = 0; // last quadratic control point, as the parser holds it
   private qy = 0;
   private sep = false; // does the next number need a separator?
@@ -71,6 +73,8 @@ class Pen {
     this.write(dy);
     this.cx += dx;
     this.cy += dy;
+    this.sx = this.cx;
+    this.sy = this.cy;
   }
 
   // A delta that rounds to nothing is dropped: it moves the pen nowhere and
@@ -130,6 +134,8 @@ class Pen {
 
   close() {
     this.out += "z";
+    this.cx = this.sx;
+    this.cy = this.sy;
     this.cmd = "";
     this.sep = false;
   }
@@ -153,69 +159,35 @@ export function centerlinePath(pts: Point2[], digits = DEFAULT_DIGITS): string {
   return pen.toString();
 }
 
-// The chord rule between two contacts -- see `chordRule`.
-export function hermiteMag(a: OutlineNode, b: OutlineNode): number {
-  return chordRule(dist(a, b), a.tx, a.ty, b.tx, b.ty);
-}
-
-// The fitted centerline as it was fitted: a line where the fit said line, a
-// cubic on the stored tangents where it said cubic. Unlike `centerlinePath`,
-// this one is faithful. `renderStroke` does not return it -- a consumer that wants
-// the centerline as path data (the debug views, and nothing else) calls this.
-export function fitPath(ns: CenterlineNode[], digits = DEFAULT_DIGITS): string {
+export function fitPath(ns: CubicNode[], digits = DEFAULT_DIGITS): string {
   if (ns.length === 0) return "";
   const pen = new Pen(digits);
   pen.moveTo(ns[0].x, ns[0].y);
   for (let i = 1; i < ns.length; i++) {
     const a = ns[i - 1];
     const b = ns[i];
-    if (a.mo === 0 && b.mi === 0) {
-      pen.lineTo(b.x, b.y);
-      continue;
+    pen.curveTo(a.c1x, a.c1y, a.c2x, a.c2y, b.x, b.y);
+  }
+  return pen.toString();
+}
+
+// One quadratic per pair of contacts, its control point where their tangent
+// lines cross -- see `quadControl`. A pair whose tangents cannot meet ahead
+// falls back to a line. Each piece is its own closed subpath.
+export function outlineQuadPath(pieces: OutlineNode[][], digits = DEFAULT_DIGITS): string {
+  const pen = new Pen(digits);
+  for (const cs of pieces) {
+    const n = cs.length;
+    if (n < 2) continue;
+    pen.moveTo(cs[0].x, cs[0].y);
+    for (let i = 0; i < n; i++) {
+      const a = cs[i],
+        b = cs[(i + 1) % n];
+      const q = quadControl(a.x, a.y, a.tx, a.ty, b.x, b.y, b.tx, b.ty);
+      if (q === null) pen.lineTo(b.x, b.y);
+      else pen.quadTo(q.x, q.y, b.x, b.y);
     }
-    const ka = a.mo / 3;
-    const kb = b.mi / 3;
-    pen.curveTo(a.x + a.ox * ka, a.y + a.oy * ka, b.x - b.ix * kb, b.y - b.iy * kb, b.x, b.y);
+    pen.close();
   }
-  return pen.toString();
-}
-
-// One cubic per pair. Each end's Hermite tangent is the stored unit tangent
-// scaled by the chord rule, and the Bezier control points sit at a third of
-// that tangent.
-export function outlinePath(cs: OutlineNode[], digits = DEFAULT_DIGITS): string {
-  const n = cs.length;
-  if (n < 2) return "";
-  const pen = new Pen(digits);
-  pen.moveTo(cs[0].x, cs[0].y);
-  for (let i = 0; i < n; i++) {
-    const a = cs[i],
-      b = cs[(i + 1) % n];
-    const k = hermiteMag(a, b) / 3;
-    pen.curveTo(a.x + a.tx * k, a.y + a.ty * k, b.x - b.tx * k, b.y - b.ty * k, b.x, b.y);
-  }
-  pen.close();
-  return pen.toString();
-}
-
-// One quadratic per pair, its control point where the two contacts' tangent
-// lines cross -- see `quadControl`. Nothing is stored per node for it: unlike a
-// cubic, a quadratic has no magnitude to choose, so the same `OutlineNode[]`
-// that `outlinePath` draws as cubics is drawn here as quadratics. A pair whose
-// tangents cannot meet ahead -- the envelope inflected across it -- falls back
-// to a line, and it is the engine's subdivision that keeps those short.
-export function outlineQuadPath(cs: OutlineNode[], digits = DEFAULT_DIGITS): string {
-  const n = cs.length;
-  if (n < 2) return "";
-  const pen = new Pen(digits);
-  pen.moveTo(cs[0].x, cs[0].y);
-  for (let i = 0; i < n; i++) {
-    const a = cs[i],
-      b = cs[(i + 1) % n];
-    const q = quadControl(a.x, a.y, a.tx, a.ty, b.x, b.y, b.tx, b.ty);
-    if (q === null) pen.lineTo(b.x, b.y);
-    else pen.quadTo(q.x, q.y, b.x, b.y);
-  }
-  pen.close();
   return pen.toString();
 }

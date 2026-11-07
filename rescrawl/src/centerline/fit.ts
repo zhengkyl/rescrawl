@@ -1,57 +1,38 @@
-import { chordRule, type Point4 } from "../math.ts";
-import type { CornerPoint } from "./corner.ts";
+import { chordRule } from "../math.ts";
+import type { Sample } from "./smooth.ts";
 
-// The segment between two nodes is a Hermite cubic from the first's out-tangent
-// (`ox`, `oy`, magnitude `mo`) to the second's in-tangent (`ix`, `iy`, `mi`).
-// Zero magnitudes at both ends read as a straight chord. In- and out-tangents
-// differ only at a corner. The radius runs as a Hermite too, with `slope`
-// (dr/ds) as its derivative.
-export type CenterlineNode = Point4 & {
-  ix: number;
-  iy: number;
-  ox: number;
-  oy: number;
-  mi: number;
-  mo: number;
-  slope: number; // dr/ds: how fast the radius grows along the stroke here
+export type CubicNode = {
+  x: number;
+  y: number;
+  tStart: number;
+  tEnd: number;
+  r: number;
+  corner: boolean;
+
+  c1x: number;
+  c1y: number;
+  c2x: number;
+  c2y: number;
+
+  // width: number;
+  // inputIndex: number;
 };
-
-// Hermite basis and its first two derivatives at u.
-export function basis(u: number) {
-  const u2 = u * u;
-  const u3 = u2 * u;
-  return {
-    h00: 2 * u3 - 3 * u2 + 1,
-    h10: u3 - 2 * u2 + u,
-    h01: -2 * u3 + 3 * u2,
-    h11: u3 - u2,
-    d00: 6 * u2 - 6 * u,
-    d10: 3 * u2 - 4 * u + 1,
-    d01: -6 * u2 + 6 * u,
-    d11: 3 * u2 - 2 * u,
-    s00: 12 * u - 6,
-    s10: 6 * u - 4,
-    s01: -12 * u + 6,
-    s11: 6 * u - 2,
-  };
-}
 
 export type HandOptions = {
   handTol?: number; // px a sample may lie off the segment that skips it
   reparam?: number; // rounds of moving each sample's u to the nearest point, then solving again
-  holdBack?: boolean; // while the pen is down, the last sample is provisional
 };
 
 export function fitHand(
-  pts: CornerPoint[],
-  s: Float64Array,
+  samples: Sample[],
+  arcLengths: Float64Array,
   o: { handTol: number; reparam: number; open: boolean },
-): CenterlineNode[] {
-  if (pts.length === 0) return [];
+): CubicNode[] {
+  if (samples.length === 0) return [];
 
-  const n = pts.length;
+  const n = samples.length;
   if (n === 1) {
-    return [{ ...pts[0], ix: 1, iy: 0, ox: 1, oy: 0, mi: 0, mo: 0, slope: 0 }];
+    return [{ ...samples[0], c1x: 0, c1y: 0, c2x: 0, c2y: 0 }];
   }
 
   const x = [0];
@@ -59,10 +40,10 @@ export function fitHand(
   {
     let totalX = 0;
     let totalY = 0;
-    let prev = pts[0];
+    let prev = samples[0];
     let curr;
     for (let i = 1; i < n; i++) {
-      curr = pts[i];
+      curr = samples[i];
       const dx = curr.x - prev.x;
       const dy = curr.y - prev.y;
       totalX += dx;
@@ -83,11 +64,11 @@ export function fitHand(
 
     const ax = x[curr] - x[prev];
     const ay = y[curr] - y[prev];
-    const aMagn = s[curr] - s[prev];
+    const aMagn = arcLengths[curr] - arcLengths[prev];
 
     const bx = x[next] - x[curr];
     const by = y[next] - y[curr];
-    const bMagn = s[next] - s[curr];
+    const bMagn = arcLengths[next] - arcLengths[curr];
 
     if (i === 0) {
       tin.push({ x: bx / bMagn, y: by / bMagn });
@@ -99,7 +80,7 @@ export function fitHand(
       tout.push(tin[i]);
       continue;
     }
-    if (pts[i].corner) {
+    if (samples[i].corner) {
       tin.push({ x: ax / aMagn, y: ay / aMagn });
       tout.push({ x: bx / bMagn, y: by / bMagn });
       continue;
@@ -119,18 +100,7 @@ export function fitHand(
     tout.push(tin[i]);
   }
 
-  const out: CenterlineNode[] = [
-    {
-      ...pts[0],
-      ix: tin[0].x,
-      iy: tin[0].y,
-      ox: tout[0].x,
-      oy: tout[0].y,
-      mi: 0,
-      mo: 0,
-      slope: 0,
-    },
-  ];
+  const out: CubicNode[] = [];
 
   const held = o.open && n > 2;
   const end = held ? n - 2 : n - 1;
@@ -143,8 +113,8 @@ export function fitHand(
     let b = a + 1;
     // Stop once the last sample taken is a corner. The one a segment starts on
     // does not count.
-    while (b <= end && (b - 1 === a || !pts[b - 1].corner)) {
-      const arc = s[b] - s[a];
+    while (b <= end && (b - 1 === a || !samples[b - 1].corner)) {
+      const arc = arcLengths[b] - arcLengths[a];
 
       const dx = x[b] - x[a];
       const dy = y[b] - y[a];
@@ -171,7 +141,7 @@ export function fitHand(
 
       const us: number[] = [];
       for (let j = a + 1; j < b; j++) {
-        us.push((s[j] - s[a]) / arc);
+        us.push((arcLengths[j] - arcLengths[a]) / arc);
       }
 
       let fits = true;
@@ -317,16 +287,12 @@ export function fitHand(
     }
     b--;
 
-    out[out.length - 1].mo = mo;
     out.push({
-      ...pts[b],
-      ix: tin[b].x,
-      iy: tin[b].y,
-      ox: tout[b].x,
-      oy: tout[b].y,
-      mi: mi,
-      mo: 0,
-      slope: 0,
+      ...samples[a],
+      c1x: samples[a].x + (mo / 3) * tout[a].x,
+      c1y: samples[a].y + (mo / 3) * tout[a].y,
+      c2x: samples[b].x - (mi / 3) * tin[b].x,
+      c2y: samples[b].y - (mi / 3) * tin[b].y,
     });
 
     a = b;
@@ -343,18 +309,23 @@ export function fitHand(
       tin[tip].x,
       tin[tip].y,
     );
-    out[out.length - 1].mo = m;
     out.push({
-      ...pts[tip],
-      ix: tin[tip].x,
-      iy: tin[tip].y,
-      ox: tout[tip].x,
-      oy: tout[tip].y,
-      mi: m,
-      mo: 0,
-      slope: 0,
+      ...samples[end],
+      c1x: samples[end].x + (m / 3) * tout[end].x,
+      c1y: samples[end].y + (m / 3) * tout[end].y,
+      c2x: samples[tip].x - (m / 3) * tin[tip].x,
+      c2y: samples[tip].y - (m / 3) * tin[tip].y,
     });
   }
+
+  const last = samples[n - 1];
+  out.push({
+    ...last,
+    c1x: last.x,
+    c1y: last.y,
+    c2x: last.x,
+    c2y: last.y,
+  });
 
   return out;
 }

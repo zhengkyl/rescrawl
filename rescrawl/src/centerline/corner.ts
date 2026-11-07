@@ -1,6 +1,5 @@
-import { clamp11, dist, type Point4 } from "../math.ts";
-
-export type CornerPoint = Point4 & { corner?: boolean };
+import { clamp11, dist } from "../math.ts";
+import type { Sample } from "./smooth.ts";
 
 export type CornerOptions = {
   cornerArm?: number; // px of arc length either side of a sample its chords reach
@@ -20,40 +19,39 @@ export type CornerTrace = {
 const DEG = Math.PI / 180;
 
 export function markCorners(
-  points: Point4[],
-  s: Float64Array,
+  samples: Sample[],
+  arcLengths: Float64Array,
   o: Required<CornerOptions>,
   trace?: CornerTrace[],
-): CornerPoint[] {
-  const out: CornerPoint[] = points.slice();
-  if (points.length === 0) return out;
+) {
+  if (samples.length === 0) return;
 
   const arm = o.cornerArm;
 
   // Each chord reaches past `arm`, so neither has zero length.
-  for (let i = 1; i < points.length - 1; i++) {
-    const currS = s[i];
+  for (let i = 1; i < samples.length - 1; i++) {
+    const currS = arcLengths[i];
     let pi = i - 1;
     for (; pi >= 0; pi--) {
-      if (currS - s[pi] > arm) break;
+      if (currS - arcLengths[pi] > arm) break;
     }
     if (pi === -1) continue;
 
     let ni = i + 1;
-    for (; ni < points.length; ni++) {
-      if (s[ni] - currS > arm) break;
+    for (; ni < samples.length; ni++) {
+      if (arcLengths[ni] - currS > arm) break;
     }
-    if (ni === points.length) continue;
+    if (ni === samples.length) continue;
 
-    const a = points[pi];
-    const p = points[i];
-    const b = points[ni];
+    const a = samples[pi];
+    const p = samples[i];
+    const b = samples[ni];
     const cin = dist(a, p);
     const cout = dist(p, b);
     const cos = ((p.x - a.x) * (b.x - p.x) + (p.y - a.y) * (b.y - p.y)) / (cin * cout);
     const turn = Math.acos(clamp11(cos)) / DEG;
     const corner = turn >= o.cornerTurn;
-    if (corner) out[i] = { ...p, corner: true };
+    if (corner) samples[i].corner = true;
     trace?.push({
       at: i,
       prev: pi,
@@ -64,5 +62,4 @@ export function markCorners(
       corner,
     });
   }
-  return out;
 }

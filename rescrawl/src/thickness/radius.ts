@@ -1,8 +1,6 @@
 import type { Sample } from "../centerline/smooth.ts";
-import type { Point4 } from "../math.ts";
 import { lerp } from "../math.ts";
 
-// Stage 2: radius from pen speed.
 export type RadiusOptions = {
   minWidth?: number; // width when moving at or above `thinSpeed`
   maxWidth?: number; // width at a standstill
@@ -19,17 +17,20 @@ function nextEma(current: number, target: number, delta: number, tauConst: numbe
 // Each point's radius is the EMA after what the pen did leaving it: sat still
 // until `tEnd`, then moved to the next point. Every point gets one, the last
 // from its `tEnd` alone -- the release, or now while the pen is down.
-export function toRadius(points: Sample[], s: Float64Array, o: Required<RadiusOptions>): Point4[] {
+export function varyThickness(
+  samples: Sample[],
+  arcLength: Float64Array,
+  o: Required<RadiusOptions>,
+) {
   const lo = o.minWidth / 2;
   const hi = o.maxWidth / 2;
 
   let smoothR = lo;
-  const radii: Point4[] = [];
 
   // Parked with the backflow experiment below, which is its only reader.
   // let prev: Point3 | null = null;
-  for (let i = 0; i < points.length; i++) {
-    const curr = points[i];
+  for (let i = 0; i < samples.length; i++) {
+    const curr = samples[i];
 
     // a pause spot is thinner leading in, and stays thick leading out
     // thick out b/c "dragging" ink
@@ -59,10 +60,10 @@ export function toRadius(points: Sample[], s: Float64Array, o: Required<RadiusOp
     }
 
     // retime leaves time to move in before every point but the first
-    const next = points[i + 1];
+    const next = samples[i + 1];
     if (next !== undefined) {
       const dt = next.tStart - curr.tEnd;
-      const speed = (s[i + 1] - s[i]) / dt;
+      const speed = (arcLength[i + 1] - arcLength[i]) / dt;
       const speedRatio = Math.min(speed / o.thinSpeed, 1);
       const widthRatio = 1 - speedRatio;
 
@@ -72,9 +73,6 @@ export function toRadius(points: Sample[], s: Float64Array, o: Required<RadiusOp
       // smoothR *= Math.pow(target / smoothR, alpha); // geometric
     }
 
-    radii.push({ x: curr.x, y: curr.y, t: curr.tStart, r: smoothR });
-    // prev = curr;
+    curr.r = smoothR;
   }
-
-  return radii;
 }

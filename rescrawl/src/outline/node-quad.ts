@@ -1,14 +1,11 @@
-import { basis, type CenterlineNode } from "../centerline/fit.ts";
-import { clamp11, dist, type Point4, quadControl, TAU } from "../math.ts";
+import type { CubicNode } from "../centerline/fit.ts";
+import { clamp11, dist, type Point2, quadControl, TAU } from "../math.ts";
 import { contactAt, type OutlineNode, wrapZeroTau } from "./contact.ts";
 
-// `node-fit` drawn with quadratics instead of cubics. Same shape of engine --
-// one contact per centerline node per side, midpoint subdivision, corners off,
-// caps the only arcs -- so the two differ in exactly one thing and can be read
-// against each other. Serialize the result with `outlineQuadPath`, not
-// `outlinePath`.
-//
-// What changes with the degree:
+// One contact per centerline node per side, midpoint subdivision, caps the only
+// arcs. A node with two tangents is not handled, so the stroke is split at
+// corners and each piece is outlined on its own; filled nonzero, the pieces'
+// union is the stroke. Serialize the result with `outlineQuadPath`.
 //
 //   - Nothing is stored per node. A quadratic through two points with two
 //     tangents is unique -- its control point is where the tangent lines cross
@@ -20,15 +17,22 @@ import { contactAt, type OutlineNode, wrapZeroTau } from "./contact.ts";
 //     piece, which falls back to a line until it is under tolerance. Expect
 //     more contacts than `node-fit` on an S-bend and about the same elsewhere.
 //   - Its circles are worse. See MAX_ANGLE_PER_QUAD.
-//
-// A variant should copy this file's envelope math rather than share it, so the
-// two can be compared without moving each other. See `pipeline.ts`.
 
 export type NodeQuadOptions = {
   maxWidth?: number; // width at a standstill; the unit SAME is measured in
   quadTol?: number; // px the drawn outline may stray from the envelope
   quadDepth?: number; // midpoint splits one centerline segment may take per side
+  zoom?: number; // quadTol is screen px at this zoom
 };
+
+export const NODE_QUAD_DEFAULTS: Required<NodeQuadOptions> = {
+  maxWidth: 8,
+  quadTol: 0.25,
+  quadDepth: 6,
+  zoom: 1,
+};
+
+type Disc = Point2 & { r: number };
 
 // Envelope samples one candidate quadratic is checked against. Interior only:
 // the ends are exact by construction, and a split re-tests fresh parameters.
@@ -44,20 +48,33 @@ const SAME = 1e-9;
 const MAX_ANGLE_PER_QUAD = Math.PI / 2;
 
 // A stroke of one disc: the full circle, in quadratic-sized pieces.
-function quadDiscLoop(p: Point4): OutlineNode[] {
+function quadDiscLoop(p: Disc): OutlineNode[] {
   const out: OutlineNode[] = [];
   const m = Math.ceil(TAU / MAX_ANGLE_PER_QUAD);
   for (let k = 0; k < m; k++) out.push(contactAt(p, (TAU * k) / m));
   return out;
 }
 
-export function toOutlineNodeQuad(
-  ns: CenterlineNode[],
-  o: Required<NodeQuadOptions>,
-): OutlineNode[] {
+export function toOutlineNodeQuad(ns: CubicNode[], options: NodeQuadOptions): OutlineNode[][] {
+  const { maxWidth, quadTol, quadDepth, zoom } = { ...NODE_QUAD_DEFAULTS, ...options };
+  const o = { maxWidth, quadTol: quadTol / zoom, quadDepth };
+
+  if (ns.length === 0) return [];
+  if (ns.length === 1) return [quadDiscLoop(ns[0])];
+
+  const pieces: OutlineNode[][] = [];
+  let start = 0;
+  for (let i = 1; i < ns.length; i++) {
+    if (i === ns.length - 1 || ns[i].corner) {
+      pieces.push(piece(ns.slice(start, i + 1), o));
+      start = i;
+    }
+  }
+  return pieces;
+}
+
+function piece(ns: CubicNode[], o: Required<Omit<NodeQuadOptions, "zoom">>): OutlineNode[] {
   const n = ns.length;
-  if (n === 0) return [];
-  if (n === 1) return quadDiscLoop(ns[0]);
 
   // The fitted centerline of segment k at u, with the radius running as a
   // Hermite on the same parameter. `rs` is dr/ds, which is what leans the
@@ -65,30 +82,23 @@ export function toOutlineNodeQuad(
   const at = (k: number, u: number) => {
     const a = ns[k];
     const b = ns[k + 1];
-    // A line is stored with zero magnitudes; as a Hermite it is the chord.
-    const line = a.mo === 0 && b.mi === 0;
-    const L = dist(a, b);
-    const px = line ? b.x - a.x : a.mo * a.ox;
-    const py = line ? b.y - a.y : a.mo * a.oy;
-    const qx = line ? b.x - a.x : b.mi * b.ix;
-    const qy = line ? b.y - a.y : b.mi * b.iy;
-    const h = basis(u);
-    const x = h.h00 * a.x + h.h10 * px + h.h01 * b.x + h.h11 * qx;
-    const y = h.h00 * a.y + h.h10 * py + h.h01 * b.y + h.h11 * qy;
-    let dx = h.d00 * a.x + h.d10 * px + h.d01 * b.x + h.d11 * qx;
-    let dy = h.d00 * a.y + h.d10 * py + h.d01 * b.y + h.d11 * qy;
+    const v = 1 - u;
+    const x = v * v * v * a.x + 3 * v * v * u * a.c1x + 3 * v * u * u * a.c2x + u * u * u * b.x;
+    const y = v * v * v * a.y + 3 * v * v * u * a.c1y + 3 * v * u * u * a.c2y + u * u * u * b.y;
+    let dx = 3 * (v * v * (a.c1x - a.x) + 2 * v * u * (a.c2x - a.c1x) + u * u * (b.x - a.c2x));
+    let dy = 3 * (v * v * (a.c1y - a.y) + 2 * v * u * (a.c2y - a.c1y) + u * u * (b.y - a.c2y));
     const speed = Math.sqrt(dx * dx + dy * dy);
     if (speed > 0) {
       dx /= speed;
       dy /= speed;
     } else {
-      dx = a.ox;
-      dy = a.oy;
+      const L = dist(a, b);
+      dx = (b.x - a.x) / L;
+      dy = (b.y - a.y) / L;
     }
-    const ma = line ? L : a.mo;
-    const mb = line ? L : b.mi;
-    const r = h.h00 * a.r + h.h10 * a.slope * ma + h.h01 * b.r + h.h11 * b.slope * mb;
-    const ru = h.d00 * a.r + h.d10 * a.slope * ma + h.d01 * b.r + h.d11 * b.slope * mb;
+    const h = (2 * u - 3) * u * u + 1;
+    const r = b.r + (a.r - b.r) * h;
+    const ru = (a.r - b.r) * 6 * u * (u - 1);
     return { x, y, dx, dy, r, rs: clamp11(speed > 0 ? ru / speed : 0) };
   };
 
@@ -201,15 +211,15 @@ export function toOutlineNodeQuad(
   // A stretch of a node's own rim, walked in increasing angle. `from`'s contact
   // is already out and `to`'s belongs to the side that follows, so only the
   // interior lands here -- one quadratic per MAX_ANGLE_PER_QUAD.
-  const rim = (p: Point4, from: number, to: number) => {
+  const rim = (p: Disc, from: number, to: number) => {
     const sweep = wrapZeroTau(to - from);
     const m = Math.ceil(sweep / MAX_ANGLE_PER_QUAD);
     for (let j = 1; j < m; j++) add(contactAt(p, from + (sweep * j) / m));
   };
-  const angleOf = (c: Point4, p: OutlineNode) => Math.atan2(p.y - c.y, p.x - c.x);
+  const angleOf = (c: Disc, p: OutlineNode) => Math.atan2(p.y - c.y, p.x - c.x);
 
   // Forward side, out from node 0. Each segment's contact at u = 0 is the one
-  // the segment before left at u = 1 -- identical, since with no corners a node
+  // the segment before left at u = 1 -- identical, since inside a piece a node
   // has one tangent and one radius slope.
   add(envelope(0, -1, 0));
   for (let k = 0; k < n - 1; k++) span(k, -1, 0, 1, envelope(k, -1, 0), 0);

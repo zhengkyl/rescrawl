@@ -5,7 +5,14 @@ export type SmoothOptions = {
   minMove?: number;
 };
 
-export type Sample = { x: number; y: number; tStart: number; tEnd: number };
+export type Sample = {
+  x: number;
+  y: number;
+  tStart: number;
+  tEnd: number;
+  r: number;
+  corner: boolean;
+};
 
 // an arc length window restricts smoothing to dense sections
 //
@@ -13,11 +20,14 @@ export type Sample = { x: number; y: number; tStart: number; tEnd: number };
 // symmetric on both sides, TODO: test alternate shapes, eg, back only
 //
 // must filter on post smoothed distances to avoid missing collapses
-export function toSmoothSamples(points: Point3[], o: Required<SmoothOptions>) {
+export function toSmoothSamples(
+  points: Point3[],
+  o: Required<SmoothOptions>,
+): { samples: Sample[]; arcLengths: Float64Array } {
   const n = points.length;
   const W = o.smoothWindow;
 
-  if (n === 0) return { points: [] as Sample[], prefixSum: new Float64Array(0) };
+  if (n === 0) return { samples: [], arcLengths: new Float64Array(0) };
 
   // there are 0 and negative timesteps
   // we assume timestamps are late, but sample order is correct
@@ -27,7 +37,9 @@ export function toSmoothSamples(points: Point3[], o: Required<SmoothOptions>) {
   const s = new Float64Array(n);
   for (let i = 1; i < n; i++) s[i] = s[i - 1] + dist(points[i - 1], points[i]);
 
-  const out: Sample[] = [{ x: points[0].x, y: points[0].y, tStart: t[0], tEnd: t[0] }];
+  const out: Sample[] = [
+    { x: points[0].x, y: points[0].y, tStart: t[0], tEnd: t[0], r: 1, corner: false },
+  ];
   const outS = new Float64Array(n);
 
   for (let i = 1; i < n; i++) {
@@ -52,7 +64,7 @@ export function toSmoothSamples(points: Point3[], o: Required<SmoothOptions>) {
       }
     }
 
-    const next = { x: x / sum, y: y / sum, tStart: t[i], tEnd: t[i] };
+    const next = { x: x / sum, y: y / sum, tStart: t[i], tEnd: t[i], r: 1, corner: false };
     const d = dist(out[out.length - 1], next);
     if (d <= o.minMove) {
       out[out.length - 1].tEnd = t[i];
@@ -62,5 +74,5 @@ export function toSmoothSamples(points: Point3[], o: Required<SmoothOptions>) {
     out.push(next);
   }
 
-  return { points: out, prefixSum: outS.subarray(0, out.length) };
+  return { samples: out, arcLengths: outS.subarray(0, out.length) };
 }

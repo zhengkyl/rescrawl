@@ -1,18 +1,12 @@
-# Rescrawl
+# rescrawl
+
+Draw beautiful lines and save as an animated SVG
 
 Create animated handwriting SVGs
 
 Try it: https://rescrawl.kylezhe.ng
 
 Originally made for this blog post https://kylezhe.ng/writes/shakespeares-sonnets
-
-## Overview
-
-Two outputs, and the whole library is arranged around the difference between them.
-
-**`.scrawl` — the points.** A newline-separated list of strokes, each a `;`-separated run of `x,y,t` deltas. Re-importable, and the only output that round trips.
-
-**Animated SVG — a drawing that draws itself.** A browser plays it; nothing reads it back. Being one-way is what lets it trade fidelity for bytes.
 
 ### The pipeline
 

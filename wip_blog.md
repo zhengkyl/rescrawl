@@ -5,10 +5,7 @@ For efficient storage and replay, converting the input points into a vector path
 
 When drawing digitally, the pen or mouse position is reported at a regular frequency, perhaps a few hundred times per second. Connecting all these points with straight lines is simple, but the result will not be smooth. In fast sections the points are too sparse for straight lines to approximate curves, and in slow sections the dense points contain unintentional jitter.
 
-landfill filled with landmines
-landmine-filled landfill
-landmine laden landfill
-Not to mention that the list of timestamped positions is a landfill--filled with landmines. We must deal with noisy, quantized, duplicated coordinates, but also negative, 0, impossibly tiny or large time steps.
+Not to mention that the list of timestamped positions is a landmine-laden landfill. The positions have to be filtered, smoothed, and deduplicated. Timestamps are consistantly inconsistant; multiple positions sharing a timestamp or even negative time steps have to be reinterpreted. Like a paleontologist, we must carefully excavate the user's intent from a matrix of refuse.
 
 For efficient storage and replay, converting the input points into a bezier spline is a fundamental decision. A spline is made of multiple curves, which each can represent a section of the drawn path with only a few control points. 
 

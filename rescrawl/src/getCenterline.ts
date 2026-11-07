@@ -1,40 +1,71 @@
-import { dist, type Point3 } from "./math.ts";
+import { type CornerOptions, markCorners } from "./centerline/corner.ts";
+import { type CubicNode, fitHand, type HandOptions } from "./centerline/fit.ts";
+import { fixBadTimesteps, holdEndUntil, type RetimeOptions } from "./centerline/retime.ts";
+import { type SmoothOptions, toSmoothSamples } from "./centerline/smooth.ts";
+import type { Point3 } from "./math.ts";
+import { type RadiusOptions, varyThickness } from "./thickness/radius.ts";
 
-// WIP api rework
-function getCenterline(prev: N2[], points: Point3[], options: O2) {
-  const pn = prev.length;
-  if (pn >= 3) {
-    // last segment can change
-    points = points.slice(prev[pn - 2].inputIndex);
+export function getCenterline(
+  prev: Centerline,
+  points: Point3[],
+  options: CenterlineOptions,
+): Centerline {
+  const o = { ...CENTERLINE_DEFAULTS, ...options };
+  const px = 1 / o.zoom;
+  const d = {
+    ...o,
+    minMove: o.minMove * px,
+    thinSpeed: o.thinSpeed * px,
+    cornerArm: o.cornerArm * px,
+    smoothWindow: o.smoothWindow * px,
+    handTol: o.handTol * px,
+  };
+
+  const tOpen = options.tOpen;
+  const open = typeof tOpen === "number";
+  if (open) points = holdEndUntil(points, tOpen);
+
+  if (points.length === 0) {
+    return { curves: [], settled: 0 };
   }
 
-  const n = points.length;
-  if (n === 0) {
-    return [];
-  }
+  const { samples, arcLengths } = toSmoothSamples(points, d);
+  fixBadTimesteps(samples, arcLengths, d);
+  varyThickness(samples, arcLengths, d);
+  markCorners(samples, arcLengths, d);
 
-  const s = new Float64Array(n); // arc length prefix sum
-  for (let i = 1; i < n; i++) s[i] = s[i - 1] + dist(points[i - 1], points[i]);
-
-  // const smooth = smoothPositions(points, options);
-  // const clean = retime(smooth, options);
+  return {
+    curves: fitHand(samples, arcLengths, { ...d, open }),
+    settled: 0,
+  };
 }
 
-type O2 = {
-  openT: number;
+// lengths in screen px at `zoom`, except minWidth and maxWidth
+export type CenterlineOptions = SmoothOptions &
+  RetimeOptions &
+  RadiusOptions &
+  CornerOptions &
+  HandOptions & {
+    zoom?: number;
+    tOpen?: number | null;
+  };
+
+export const CENTERLINE_DEFAULTS: Required<Omit<CenterlineOptions, "tOpen">> = {
+  zoom: 1,
+  smoothWindow: 0,
+  minMove: 1.5,
+  framePeriod: 1000 / 60,
+  minWidth: 1.5,
+  maxWidth: 8,
+  thinSpeed: 1,
+  widthLag: 80,
+  cornerArm: 4,
+  cornerTurn: 30,
+  handTol: 0.8,
+  reparam: 2,
 };
 
-type N2 = {
-  x: number;
-  y: number;
-  c1x: number;
-  c1y: number;
-  c2x: number;
-  c2y: number;
-
-  startT: number;
-  endT: number;
-
-  // width: number;
-  inputIndex: number;
+export type Centerline = {
+  curves: CubicNode[];
+  settled: number;
 };
