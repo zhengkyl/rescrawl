@@ -1,8 +1,17 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import type { CenterlineNode, Point2, Point3, Point4, RenderOptions } from "rescrawl";
-import { centerlineStages, fitCenterline, holdEndUntil, RENDER_DEFAULTS, toDrawingPx } from "rescrawl";
-import { type CornerTrace, markCorners } from "rescrawl/centerline/corner";
+import {
+  CENTERLINE_DEFAULTS,
+  type Centerline,
+  type CenterlineOptions,
+  type CubicNode,
+  getCenterline,
+  holdEndUntil,
+  type Point2,
+  type Point3,
+} from "rescrawl";
+import type { CornerTrace } from "rescrawl/centerline/corner";
+import { centerlineStages } from "../stages";
 import { deserialize } from "../utils";
 import "./centerline.css";
 
@@ -11,8 +20,8 @@ import "./centerline.css";
 //
 //   smoothing -> retime -> radius -> corners -> fit
 //
-// -- the library's own pipeline, `centerlineStages` then `fitCenterline`, with
-// the knobs here folded into its options -- and the fit comes out as plain
+// -- the library's own `getCenterline`, with the knobs here folded into its
+// options -- and the fit comes out as plain
 // Bezier cubics, for drawing and measuring.
 //
 // The `fed` scrubber walks the input back a sample at a time and reruns
@@ -28,22 +37,20 @@ type Meta = { pointerType: string; zoom: number; coalesced: boolean } | null;
 
 const DEFAULTS = {
   radius: "speed" as RadiusKind,
-  minWidth: RENDER_DEFAULTS.minWidth,
-  maxWidth: RENDER_DEFAULTS.maxWidth,
-  thinSpeed: RENDER_DEFAULTS.thinSpeed,
-  widthLag: RENDER_DEFAULTS.widthLag,
+  minWidth: CENTERLINE_DEFAULTS.minWidth,
+  maxWidth: CENTERLINE_DEFAULTS.maxWidth,
+  thinSpeed: CENTERLINE_DEFAULTS.thinSpeed,
+  widthLag: CENTERLINE_DEFAULTS.widthLag,
 
-  corners: false,
-  cornerArm: RENDER_DEFAULTS.cornerArm,
+  cornerArm: CENTERLINE_DEFAULTS.cornerArm,
   cornerTurn: 30,
   cornerDebug: false,
 
-  smoothWindow: RENDER_DEFAULTS.smoothWindow,
+  smoothWindow: CENTERLINE_DEFAULTS.smoothWindow,
 
 
-  handTol: RENDER_DEFAULTS.handTol,
+  handTol: CENTERLINE_DEFAULTS.handTol,
   reparam: 2,
-  holdBack: true,
 
   showRaw: true,
   showInput: true,
@@ -60,7 +67,7 @@ const DEFAULTS = {
 
   coalesced: true,
   framePeriod: 1000 / 60,
-  minMove: RENDER_DEFAULTS.minMove,
+  minMove: CENTERLINE_DEFAULTS.minMove,
 };
 type Settings = typeof DEFAULTS;
 
@@ -90,34 +97,28 @@ function save(key: string, value: unknown) {
 // The knobs as the library's options, for a stroke drawn at `zoom`. "fixed"
 // radius is min = max width, which holds the radius at the full pen whatever
 // the speed -- pen speed out of the picture when only the path is under study.
-const pipelineOptions = (s: Settings, zoom: number): RenderOptions => ({
+const pipelineOptions = (
+  s: Settings,
+  zoom: number,
+  pts: Point3[],
+  open: boolean,
+): CenterlineOptions => ({
   ...s,
   zoom,
   minWidth: s.radius === "fixed" ? s.maxWidth : s.minWidth,
+  tOpen: open && pts.length > 0 ? pts[pts.length - 1].t : null,
 });
 
-// The corners stage again, for its trace: called directly, so its options are
-// put in drawing px here, as the pipeline would.
-function traceCorners(pts: Point4[], prefixSum: Float64Array, s: Settings, zoom: number): CornerTrace[] {
-  const trace: CornerTrace[] = [];
-  markCorners(pts, prefixSum, toDrawingPx({ ...RENDER_DEFAULTS, ...pipelineOptions(s, zoom) }), trace);
-  return trace;
-}
-
-// A node list as Bezier cubics, the same conversion `fitPath` makes: control
-// points a third of the Hermite tangent in from each end. Zero magnitudes at
-// both ends are a straight chord, drawn with its handles on its endpoints.
-function nodeCubics(ns: CenterlineNode[]): Cubic[] {
+// A node list as Bezier cubics.
+function nodeCubics(ns: CubicNode[]): Cubic[] {
   const out: Cubic[] = [];
   for (let i = 1; i < ns.length; i++) {
     const a = ns[i - 1];
     const b = ns[i];
-    const ka = a.mo / 3;
-    const kb = b.mi / 3;
     out.push([
       { x: a.x, y: a.y },
-      { x: a.x + a.ox * ka, y: a.y + a.oy * ka },
-      { x: b.x - b.ix * kb, y: b.y - b.iy * kb },
+      { x: a.c1x, y: a.c1y },
+      { x: a.c2x, y: a.c2y },
       { x: b.x, y: b.y },
     ]);
   }
@@ -133,12 +134,12 @@ type Fitted = {
 
 // The stroke as it stood after `fed` samples, through the whole pipeline.
 // `open`: the pen is still down, so more samples are coming.
-function run(stroke: Point3[], fed: number, s: Settings, zoom: number, open: boolean) {
-  const o = pipelineOptions(s, zoom);
-  const stages = centerlineStages(stroke.slice(0, fed), o);
-  const nodes = fitCenterline(stages, o, open);
-  const fitted: Fitted = { cubics: nodeCubics(nodes), times: nodes.map((n) => n.t) };
-  return { stages, fitted };
+const NO_PREV: Centerline = { curves: [], settled: 0 };
+
+function run(stroke: Point3[], fed: number, s: Settings, zoom: number, open: boolean): Fitted {
+  const pts = stroke.slice(0, fed);
+  const { curves } = getCenterline(NO_PREV, pts, pipelineOptions(s, zoom, pts, open));
+  return { cubics: nodeCubics(curves), times: curves.map((n) => n.tStart) };
 }
 
 // Mean ms per call. One call is under the timer's resolution for most strokes,
@@ -785,7 +786,7 @@ export function CenterlinePage() {
   // The same pipeline one sample earlier: what was on screen the frame before.
   const ghost = useMemo((): Fitted => {
     if (fed < 2) return { cubics: [], times: [] };
-    return run(stroke, fed - 1, s, drawnZoom, true).fitted;
+    return run(stroke, fed - 1, s, drawnZoom, true);
   }, [stroke, fed, s, drawnZoom]);
 
   // Onion skin: the last `onionFrames` frames before this one, newest first,
@@ -797,7 +798,7 @@ export function CenterlinePage() {
       const cubics =
         j === 1
           ? ghost.cubics
-          : run(stroke, fed - j, s, drawnZoom, true).fitted.cubics;
+          : run(stroke, fed - j, s, drawnZoom, true).cubics;
       out.push(cubicsPath(cubics));
     }
     return out;
@@ -805,22 +806,22 @@ export function CenterlinePage() {
 
   const frame = useMemo(() => {
     const repeat = !drawing;
-    const o = pipelineOptions(s, drawnZoom);
-    const [stages, tCenterline] = timed(() => centerlineStages(stroke.slice(0, fed), o), repeat);
-    const trace = s.corners && s.cornerDebug ? traceCorners(stages.radius, stages.prefixSum, s, drawnZoom) : null;
     // Open while drawing, and whenever the scrubber stops short of the end: that
     // prefix is the stroke as it stood with the pen still down.
     const open = drawing || fed < stroke.length;
-    const [nodes, tFit] = timed(() => fitCenterline(stages, o, open), repeat);
+    const pts = stroke.slice(0, fed);
+    const o = pipelineOptions(s, drawnZoom, pts, open);
+    const [{ curves }, tCenterline] = timed(() => getCenterline(NO_PREV, pts, o), repeat);
+    const trace: CornerTrace[] = [];
+    const { radius } = centerlineStages(pts, o, trace);
     return {
-      raw: stages.radius,
-      radius: stages.radius,
-      trace,
-      input: stages.radius,
-      cubics: nodeCubics(nodes),
-      times: nodes.map((n) => n.t),
+      raw: radius.map((p) => ({ x: p.x, y: p.y, t: p.tStart })),
+      radius,
+      trace: s.cornerDebug ? trace : null,
+      input: radius,
+      cubics: nodeCubics(curves),
+      times: curves.map((n) => n.tStart),
       tCenterline,
-      tFit,
     };
   }, [stroke, fed, s, drawnZoom, drawing]);
 
@@ -1354,42 +1355,33 @@ export function CenterlinePage() {
           </Section>
 
           <Section title="corners">
-            <Check
-              label="detect corners"
-              value={s.corners}
-              onInput={(corners) => set({ corners })}
+            <Knob
+              label="arm"
+              title="Screen px of arc length either side of a sample that its in and out chords reach."
+              min={0}
+              max={32}
+              step={0.5}
+              value={s.cornerArm}
+              onInput={(cornerArm) => set({ cornerArm })}
             />
-            {s.corners && (
-              <>
-                <Knob
-                  label="arm"
-                  title="Screen px of arc length either side of a sample that its in and out chords reach."
-                  min={0}
-                  max={32}
-                  step={0.5}
-                  value={s.cornerArm}
-                  onInput={(cornerArm) => set({ cornerArm })}
-                />
-                <Knob
-                  label="min turn°"
-                  title="angle between in chord and out chord at or above this; 0 is off"
-                  min={0}
-                  max={180}
-                  step={1}
-                  value={s.cornerTurn}
-                  onInput={(cornerTurn) => set({ cornerTurn })}
-                />
-                <Check
-                  label="inspect"
-                  value={s.cornerDebug}
-                  onInput={(cornerDebug) => set({ cornerDebug })}
-                />
-                {s.cornerDebug && (
-                  <p class="note">
-                    shift-click the canvas or drag in the strip to probe a vertex; [ ] step it
-                  </p>
-                )}
-              </>
+            <Knob
+              label="min turn°"
+              title="angle between in chord and out chord at or above this; 0 is off"
+              min={0}
+              max={180}
+              step={1}
+              value={s.cornerTurn}
+              onInput={(cornerTurn) => set({ cornerTurn })}
+            />
+            <Check
+              label="inspect"
+              value={s.cornerDebug}
+              onInput={(cornerDebug) => set({ cornerDebug })}
+            />
+            {s.cornerDebug && (
+              <p class="note">
+                shift-click the canvas or drag in the strip to probe a vertex; [ ] step it
+              </p>
             )}
           </Section>
 
@@ -1423,11 +1415,6 @@ export function CenterlinePage() {
               step={1}
               value={s.reparam}
               onInput={(reparam) => set({ reparam })}
-            />
-            <Check
-              label="hold back last sample while open"
-              value={s.holdBack}
-              onInput={(holdBack) => set({ holdBack })}
             />
           </Section>
 
@@ -1535,12 +1522,10 @@ export function CenterlinePage() {
                     <span class="dim"> of {fed}</span>
                   </td>
                 </tr>
-                {s.corners && (
-                  <tr title="corners flagged in the fit input">
-                    <th>corners</th>
-                    <td>{input.filter((p) => p.corner).length}</td>
-                  </tr>
-                )}
+                <tr title="corners flagged in the fit input">
+                  <th>corners</th>
+                  <td>{input.filter((p) => p.corner).length}</td>
+                </tr>
                 <tr>
                   <th>segments</th>
                   <td>{cubics.length}</td>
@@ -1585,13 +1570,9 @@ export function CenterlinePage() {
                     </td>
                   </tr>
                 )}
-                <tr title="mean ms per call: stages 0-3, then the fit">
+                <tr title="mean ms per getCenterline call">
                   <th>ms</th>
-                  <td>
-                    <span class="dim">centerline</span> {fmt(frame.tCenterline, 3)}
-                    <br />
-                    <span class="dim">fit</span> {fmt(frame.tFit, 3)}
-                  </td>
+                  <td>{fmt(frame.tCenterline, 3)}</td>
                 </tr>
               </tbody>
             </table>
@@ -1789,12 +1770,10 @@ export function CenterlinePage() {
                   segments
                 </span>
               )}
-              {s.corners && (
-                <span>
-                  <i style={{ background: CORNER_COLOR }} />
-                  corner
-                </span>
-              )}
+              <span>
+                <i style={{ background: CORNER_COLOR }} />
+                corner
+              </span>
               {probeLayer !== null && (
                 <span>
                   <i style={{ background: PROBE_COLOR }} />

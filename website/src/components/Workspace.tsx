@@ -7,7 +7,6 @@ import {
   getDefaultStrategies,
   INK_DEFAULTS,
   INK_STORAGE_KEY,
-  withKnownModes,
 } from "../curves";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { usePlayhead } from "../hooks/usePlayhead";
@@ -31,12 +30,10 @@ export function Workspace() {
 
   const [strategies, setStrategies] = useState<StrategiesState>(getDefaultStrategies);
   const [debug, setDebug] = useState<DebugLayers>(DEBUG_DEFAULTS);
-  const [inkOptions, setInkOptions] = useState<InkOptions>(() =>
-    withKnownModes({
-      ...INK_DEFAULTS,
-      ...JSON.parse(localStorage.getItem(INK_STORAGE_KEY) || "{}"),
-    }),
-  );
+  const [inkOptions, setInkOptions] = useState<InkOptions>(() => ({
+    ...INK_DEFAULTS,
+    ...JSON.parse(localStorage.getItem(INK_STORAGE_KEY) || "{}"),
+  }));
   const [config, setConfig] = useState<Config>(() => ({
     ...DEFAULT_CONFIG,
     ...JSON.parse(localStorage.getItem("rescrawl-config") || "{}"),

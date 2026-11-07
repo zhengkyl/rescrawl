@@ -1,5 +1,6 @@
-import { renderStroke } from "../src/pipeline.ts";
+import { getCenterline } from "../src/getCenterline.ts";
 import type { Point3 } from "../src/math.ts";
+import { toOutlineNodeQuad } from "../src/outline/node-quad.ts";
 import { discCoverage } from "./geometry.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 
@@ -8,6 +9,11 @@ import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 // wrapped, and nothing reaches that yet, so the point is the trend.
 
 const REPEATS = 30;
+
+function renderStroke(pts: Point3[]) {
+  const { curves } = getCenterline({ curves: [], settled: 0 }, pts, {});
+  return { curves, outline: toOutlineNodeQuad(curves, {}) };
+}
 
 function ms(run: () => void): number {
   run();
@@ -37,9 +43,9 @@ function measure(name: string, group: Point3[][]) {
   let at = "-";
   group.forEach((pts, s) => {
     const r = renderStroke(pts);
-    nodes += r.stages.nodes.length;
-    contacts += r.outline.length;
-    const c = discCoverage(r.stages.nodes, r.outline);
+    nodes += r.curves.length;
+    contacts += r.outline.flat().length;
+    const c = discCoverage(r.curves, r.outline);
     if (c.worst < worst) {
       worst = c.worst;
       at = group.length > 1 ? `${s}:${c.node}` : `#${c.node}`;

@@ -1,7 +1,7 @@
 import type { ReadonlySignal, Signal } from "@preact/signals";
 import { computed, useSignal } from "@preact/signals";
 import { useEffect, useMemo, useRef } from "preact/hooks";
-import { type CenterlineNode, holdEndUntil } from "rescrawl";
+import { type CubicNode, holdEndUntil } from "rescrawl";
 import { useApp } from "../context";
 import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from "../curves";
 import {
@@ -180,7 +180,7 @@ function HoverLabel({ hover }: { hover: Signal<HoverPick | null> }) {
 // other node round. Markers are zero-length round/square-capped paths and the
 // spine is a non-scaling stroke, so both hold their size on screen at any zoom
 // while the geometry under them tracks the canvas.
-function CenterlineLayer({ nodes }: { nodes: CenterlineNode[] }) {
+function CenterlineLayer({ nodes }: { nodes: CubicNode[] }) {
   return (
     <g>
       <path
@@ -212,7 +212,7 @@ function CenterlineLayer({ nodes }: { nodes: CenterlineNode[] }) {
 // length is the magnitude it solved for. Reading these against the samples is
 // how a fit that tracks the ink is told from one that merely ends up in the
 // right places: an overlong handle bulges between two nodes that both sit right.
-function HandleLayer({ nodes }: { nodes: CenterlineNode[] }) {
+function HandleLayer({ nodes }: { nodes: CubicNode[] }) {
   return (
     <g>
       {curveHandles(nodes).map((h, j) => (
@@ -247,8 +247,9 @@ function drawDebug(
   t: number,
   key: string | number,
   layers: DebugLayers,
+  open?: boolean,
 ) {
-  const { outline, stages } = inkStages(stroke, options, t);
+  const { outline, stages } = inkStages(stroke, options, t, open);
   return (
     <g key={key}>
       {DEBUG_STAGES.map(
@@ -260,7 +261,7 @@ function drawDebug(
                   key={j}
                   cx={p.x}
                   cy={p.y}
-                  r={"r" in p ? p.r : dot}
+                  r={dot ?? ("r" in p ? p.r : 0)}
                   fill="none"
                   stroke={color}
                   stroke-width="1"
@@ -358,11 +359,11 @@ function LiveStroke({
   if (live === null) return null;
   return (
     <>
-      <g>{drawLine(renderInk(live, inkOptions, Infinity), "live-ink", INK_COLOR)}</g>
+      <g>{drawLine(renderInk(live, inkOptions, Infinity, true), "live-ink", INK_COLOR)}</g>
       {strategies.map(({ def, param }) => (
         <g key={`live-${def.id}`}>
           {def.id === "debug"
-            ? drawDebug(live, inkOptions, Infinity, "live-dbg", debug)
+            ? drawDebug(live, inkOptions, Infinity, "live-dbg", debug, true)
             : drawLine(def.render(live, param, Infinity), "live", def.color)}
         </g>
       ))}

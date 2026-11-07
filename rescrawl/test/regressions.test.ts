@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { renderStroke } from "../src/pipeline.ts";
+import { getCenterline } from "../src/getCenterline.ts";
+import { toOutlineNodeQuad } from "../src/outline/node-quad.ts";
 
 // A saved stroke and the bench settings it was saved with, as the library takes
 // them: "average" smoothing is the window, "none" is 0.
@@ -23,8 +24,9 @@ describe("non-finite", () => {
   // samples the same position, and the hand fit divided by the zero step.
   const { raw, options } = sample("2026-11-01T23-25-01-non-finite.json");
   test("every node and contact finite", () => {
-    const { stages, outline } = renderStroke(raw, options);
-    stages.nodes.forEach((n, i) => assert.ok(finite(n), `node ${i}: ${JSON.stringify(n)}`));
+    const { curves } = getCenterline({ curves: [], settled: 0 }, raw, options);
+    const outline = toOutlineNodeQuad(curves, options).flat();
+    curves.forEach((n, i) => assert.ok(finite(n), `node ${i}: ${JSON.stringify(n)}`));
     outline.forEach((c, i) => assert.ok(finite(c), `contact ${i}: ${JSON.stringify(c)}`));
   });
 });

@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { holdEndUntil, retime } from "../src/centerline/retime.ts";
+import { fixBadTimesteps, holdEndUntil } from "../src/centerline/retime.ts";
 import { type Sample, toSmoothSamples } from "../src/centerline/smooth.ts";
 import { dist, type Point3 } from "../src/math.ts";
-import { centerlineStages } from "../src/pipeline.ts";
 
 // No fold past exact repeats, so these read as the stamps alone.
 const O = { framePeriod: 16, minMove: 0 };
@@ -13,8 +12,9 @@ const O = { framePeriod: 16, minMove: 0 };
 const line = (ts: number[]): Point3[] => ts.map((t, i) => ({ x: i * 10, y: 0, t }));
 const xt = (pts: Sample[]) => pts.map((p) => [p.x, +p.tStart.toFixed(1), +p.tEnd.toFixed(1)]);
 const run = (pts: Point3[], o: { framePeriod: number; minMove: number } = O) => {
-  const { points, prefixSum } = toSmoothSamples(pts, { smoothWindow: 0, minMove: o.minMove });
-  return retime(points, prefixSum, o);
+  const { samples, arcLengths } = toSmoothSamples(pts, { smoothWindow: 0, minMove: o.minMove });
+  fixBadTimesteps(samples, arcLengths, o);
+  return samples;
 };
 
 describe("retime", () => {
@@ -22,7 +22,7 @@ describe("retime", () => {
     const pts = line([0, 16, 32, 48]);
     assert.deepEqual(
       run(pts),
-      pts.map((p) => ({ x: p.x, y: p.y, tStart: p.t, tEnd: p.t })),
+      pts.map((p) => ({ x: p.x, y: p.y, tStart: p.t, tEnd: p.t, r: 1, corner: false })),
     );
   });
 
@@ -103,17 +103,6 @@ describe("retime", () => {
     ];
     assert.deepEqual(xt(run(pts, { ...O, minMove: 1.5 })), [
       [0, 0, 16],
-      [5, 32, 48],
-      [10, 64, 64],
-    ]);
-    // The pipeline's `minMove` is in screen px: at 2x zoom, 1.5 is 0.75 px,
-    // and the sample 1 px on is kept.
-    const at = (zoom: number) =>
-      xt(centerlineStages(pts, { framePeriod: 16, minMove: 1.5, zoom }).retimed);
-    assert.deepEqual(at(1), xt(run(pts, { ...O, minMove: 1.5 })));
-    assert.deepEqual(at(2), [
-      [0, 0, 0],
-      [1, 16, 16],
       [5, 32, 48],
       [10, 64, 64],
     ]);

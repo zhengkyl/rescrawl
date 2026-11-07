@@ -1,55 +1,57 @@
-import type { CenterlineNode } from "../src/centerline/fit.ts";
-import { chordRule, dist, type Point3 } from "../src/math.ts";
+import { dist, type Point3, quadControl } from "../src/math.ts";
 import type { OutlineNode } from "../src/outline/contact.ts";
 
-// The outline as `outlinePath` emits it, flattened to a dense polygon. Testing
-// against the contacts alone reports failures that are not real: chords cut
-// across the curve wherever contacts are sparse.
-export function outlinePolygon(cs: OutlineNode[], step = 0.25): { x: number; y: number }[] {
-  const out: { x: number; y: number }[] = [];
-  for (let i = 0; i < cs.length; i++) {
-    const a = cs[i];
-    const b = cs[(i + 1) % cs.length];
-    const k = chordRule(dist(a, b), a.tx, a.ty, b.tx, b.ty) / 3;
-    const c1x = a.x + a.tx * k;
-    const c1y = a.y + a.ty * k;
-    const c2x = b.x - b.tx * k;
-    const c2y = b.y - b.ty * k;
-    const n = Math.max(3, Math.ceil((dist(a, b) + 1) / step));
-    for (let j = 0; j < n; j++) {
-      const u = j / n;
-      const v = 1 - u;
-      out.push({
-        x: v * v * v * a.x + 3 * v * v * u * c1x + 3 * v * u * u * c2x + u * u * u * b.x,
-        y: v * v * v * a.y + 3 * v * v * u * c1y + 3 * v * u * u * c2y + u * u * u * b.y,
-      });
+type Poly = { x: number; y: number }[];
+
+// Each piece as `outlineQuadPath` draws it, flattened to a dense polygon.
+// Testing against the contacts alone reports failures that are not real.
+export function outlinePolygons(pieces: OutlineNode[][], step = 0.25): Poly[] {
+  return pieces.map((cs) => {
+    const out: Poly = [];
+    for (let i = 0; i < cs.length; i++) {
+      const a = cs[i];
+      const b = cs[(i + 1) % cs.length];
+      const q = quadControl(a.x, a.y, a.tx, a.ty, b.x, b.y, b.tx, b.ty) ?? {
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2,
+      };
+      const n = Math.max(3, Math.ceil((dist(a, b) + 1) / step));
+      for (let j = 0; j < n; j++) {
+        const u = j / n;
+        const v = 1 - u;
+        out.push({
+          x: v * v * a.x + 2 * v * u * q.x + u * u * b.x,
+          y: v * v * a.y + 2 * v * u * q.y + u * u * b.y,
+        });
+      }
     }
-  }
-  return out;
+    return out;
+  });
 }
 
-// Nonzero winding, the fill rule the renderer uses: the fold on the inside of a
-// turn is filled, not punched out.
-export function contains(poly: { x: number; y: number }[], px: number, py: number): boolean {
+// Nonzero winding summed over every piece, the fill rule the renderer uses.
+export function contains(polys: Poly[], px: number, py: number): boolean {
   let w = 0;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    const side = (b.x - a.x) * (py - a.y) - (px - a.x) * (b.y - a.y);
-    if (a.y <= py) {
-      if (b.y > py && side > 0) w++;
-    } else if (b.y <= py && side < 0) w--;
+  for (const poly of polys) {
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      const side = (b.x - a.x) * (py - a.y) - (px - a.x) * (b.y - a.y);
+      if (a.y <= py) {
+        if (b.y > py && side > 0) w++;
+      } else if (b.y <= py && side < 0) w--;
+    }
   }
   return w !== 0;
 }
 
 // Smallest fraction of any node's rim the outline contains. 1 is sound.
 export function discCoverage(
-  nodes: CenterlineNode[],
-  outline: OutlineNode[],
+  nodes: { x: number; y: number; r: number }[],
+  pieces: OutlineNode[][],
   rim = 32,
 ): { worst: number; node: number } {
-  const poly = outlinePolygon(outline);
+  const polys = outlinePolygons(pieces);
   let worst = 1;
   let node = -1;
   nodes.forEach((nd, i) => {
@@ -57,7 +59,7 @@ export function discCoverage(
     for (let k = 0; k < rim; k++) {
       const a = (2 * Math.PI * k) / rim;
       // 0.95 out: a point exactly on the rim is a coin toss for any winding test.
-      if (contains(poly, nd.x + Math.cos(a) * nd.r * 0.95, nd.y + Math.sin(a) * nd.r * 0.95)) hit++;
+      if (contains(polys, nd.x + Math.cos(a) * nd.r * 0.95, nd.y + Math.sin(a) * nd.r * 0.95)) hit++;
     }
     if (hit / rim < worst) {
       worst = hit / rim;
