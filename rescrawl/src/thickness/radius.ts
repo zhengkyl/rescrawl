@@ -2,21 +2,18 @@ import type { Sample } from "../centerline/smooth.ts";
 import { lerp } from "../math.ts";
 
 export type RadiusOptions = {
-  minWidth?: number; // width when moving at or above `thinSpeed`
-  maxWidth?: number; // width at a standstill
-  thinSpeed?: number; // px/ms at which the stroke reaches minWidth
+  minWidth?: number;
+  maxWidth?: number;
+  thinSpeed?: number;
   widthLag?: number; // ms for the width to catch up at a standstill
 };
 
-function nextEma(current: number, target: number, delta: number, tauConst: number) {
-  const stepWeight = delta / tauConst;
+export function nextEma(current: number, target: number, nextDelta: number, tauConst: number) {
+  const stepWeight = nextDelta / tauConst;
   const alpha = 1 - Math.exp(-stepWeight);
   return current + (target - current) * alpha;
 }
 
-// Each point's radius is the EMA after what the pen did leaving it: sat still
-// until `tEnd`, then moved to the next point. Every point gets one, the last
-// from its `tEnd` alone -- the release, or now while the pen is down.
 export function varyThickness(
   samples: Sample[],
   arcLength: Float64Array,
@@ -27,8 +24,6 @@ export function varyThickness(
 
   let smoothR = lo;
 
-  // Parked with the backflow experiment below, which is its only reader.
-  // let prev: Point3 | null = null;
   for (let i = 0; i < samples.length; i++) {
     const curr = samples[i];
 

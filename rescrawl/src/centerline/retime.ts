@@ -5,7 +5,7 @@ export type RetimeOptions = {
   framePeriod?: number; // ms between input frames
 };
 
-export function fixBadTimesteps(
+export function retimeBadTimesteps(
   samples: Sample[],
   arcLength: Float64Array,
   o: Required<RetimeOptions>,

@@ -20,19 +20,19 @@ export type Sample = {
 // symmetric on both sides, TODO: test alternate shapes, eg, back only
 //
 // must filter on post smoothed distances to avoid missing collapses
+//
+// adding points can't move samples[0..placed], only grow samples[placed].tEnd
 export function toSmoothSamples(
   points: Point3[],
   o: Required<SmoothOptions>,
-): { samples: Sample[]; arcLengths: Float64Array } {
+): { samples: Sample[]; arcLengths: Float64Array; placed: number } {
   const n = points.length;
   const W = o.smoothWindow;
 
-  if (n === 0) return { samples: [], arcLengths: new Float64Array(0) };
-
-  // there are 0 and negative timesteps
-  // we assume timestamps are late, but sample order is correct
+  // there are 0 and negative timesteps, but sample order is correct
+  // drag error forward instead of back so old points don't change
   const t = points.map((p) => p.t);
-  for (let i = n - 2; i >= 0; i--) t[i] = Math.min(t[i], t[i + 1]);
+  for (let i = 1; i < n; i++) t[i] = Math.max(t[i - 1], t[i]);
 
   const s = new Float64Array(n);
   for (let i = 1; i < n; i++) s[i] = s[i - 1] + dist(points[i - 1], points[i]);
@@ -41,6 +41,7 @@ export function toSmoothSamples(
     { x: points[0].x, y: points[0].y, tStart: t[0], tEnd: t[0], r: 1, corner: false },
   ];
   const outS = new Float64Array(n);
+  let placed = 0;
 
   for (let i = 1; i < n; i++) {
     const pi = points[i];
@@ -71,8 +72,9 @@ export function toSmoothSamples(
       continue;
     }
     outS[out.length] = outS[out.length - 1] + d;
+    if (W === 0 || s[n - 1] - s[i] > W) placed = out.length;
     out.push(next);
   }
 
-  return { samples: out, arcLengths: outS.subarray(0, out.length) };
+  return { samples: out, arcLengths: outS.subarray(0, out.length), placed };
 }

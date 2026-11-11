@@ -19,20 +19,33 @@ export type CubicNode = {
 };
 
 export type HandOptions = {
-  handTol?: number; // px a sample may lie off the segment that skips it
+  handTol?: number; // px a sample may lie off the segment
   reparam?: number; // rounds of moving each sample's u to the nearest point, then solving again
 };
 
+type ResumableFit = { body: CubicNode[]; tail: CubicNode[]; resume: number };
+
+// all 0 movement points must be filtered out before
+//
+// fits from samples[start], nodes decided by samples[0..stable) go in body
+// stable === samples.length means the stroke is done, so all nodes are body
 export function fitHand(
   samples: Sample[],
   arcLengths: Float64Array,
-  o: { handTol: number; reparam: number; open: boolean },
-): CubicNode[] {
-  if (samples.length === 0) return [];
+  o: { handTol: number; reparam: number },
+  start = 0,
+  stable = 0,
+): ResumableFit {
+  const body: CubicNode[] = [];
+  const tail: CubicNode[] = [];
+  let resume = start;
 
   const n = samples.length;
+  const done = stable === n;
   if (n === 1) {
-    return [{ ...samples[0], c1x: 0, c1y: 0, c2x: 0, c2y: 0 }];
+    const first = samples[0];
+    (done ? body : tail).push({ ...first, c1x: first.x, c1y: first.y, c2x: first.x, c2y: first.y });
+    return { body, tail, resume };
   }
 
   const x = [0];
@@ -100,19 +113,16 @@ export function fitHand(
     tout.push(tin[i]);
   }
 
-  const out: CubicNode[] = [];
+  // hold back the tip while it can still move
+  const end = done ? n - 1 : n - 2;
 
-  const held = o.open && n > 2;
-  const end = held ? n - 2 : n - 1;
-
-  let a = 0;
+  let a = start;
   while (a < end) {
     let mo = 0;
     let mi = 0;
 
     let b = a + 1;
-    // Stop once the last sample taken is a corner. The one a segment starts on
-    // does not count.
+
     while (b <= end && (b - 1 === a || !samples[b - 1].corner)) {
       const arc = arcLengths[b] - arcLengths[a];
 
@@ -285,20 +295,29 @@ export function fitHand(
       mi = mb;
       b++;
     }
+
+    // tin[b] reads samples[b + 1]
+    const settles = done || b + 1 < stable;
     b--;
 
-    out.push({
+    const node = {
       ...samples[a],
       c1x: samples[a].x + (mo / 3) * tout[a].x,
       c1y: samples[a].y + (mo / 3) * tout[a].y,
       c2x: samples[b].x - (mi / 3) * tin[b].x,
       c2y: samples[b].y - (mi / 3) * tin[b].y,
-    });
+    };
+    if (settles) {
+      body.push(node);
+      resume = b;
+    } else {
+      tail.push(node);
+    }
 
     a = b;
   }
 
-  if (held) {
+  if (!done) {
     const tip = n - 1;
     const dx = x[tip] - x[end];
     const dy = y[tip] - y[end];
@@ -309,7 +328,7 @@ export function fitHand(
       tin[tip].x,
       tin[tip].y,
     );
-    out.push({
+    tail.push({
       ...samples[end],
       c1x: samples[end].x + (m / 3) * tout[end].x,
       c1y: samples[end].y + (m / 3) * tout[end].y,
@@ -319,15 +338,17 @@ export function fitHand(
   }
 
   const last = samples[n - 1];
-  out.push({
+  const lastNode = {
     ...last,
     c1x: last.x,
     c1y: last.y,
     c2x: last.x,
     c2y: last.y,
-  });
+  };
 
-  return out;
+  (done ? body : tail).push(lastNode);
+
+  return { body, tail, resume };
 }
 
 function speedRatio(dx: number, dy: number, t0x: number, t0y: number, t1x: number, t1y: number) {
