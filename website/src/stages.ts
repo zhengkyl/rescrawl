@@ -1,9 +1,10 @@
 import { CENTERLINE_DEFAULTS, type CenterlineOptions, type CubicNode, type Point3 } from "rescrawl";
 import { type CornerTrace, markCorners } from "rescrawl/centerline/corner";
 import { fitHand } from "rescrawl/centerline/fit";
-import { fixBadTimesteps, holdEndUntil } from "rescrawl/centerline/retime";
+import { retimeBadTimesteps } from "rescrawl/centerline/retime";
 import { type Sample, toSmoothSamples } from "rescrawl/centerline/smooth";
 import { varyThickness } from "rescrawl/thickness/radius";
+import { stableSamples } from "rescrawl/Centerline";
 
 export type CenterlineStages = {
   raw: Point3[];
@@ -15,9 +16,11 @@ export type CenterlineStages = {
 
 const copy = (samples: Sample[]) => samples.map((p) => ({ ...p }));
 
+// Centerline.curves(tOpen) in one pass, keeping each stage
 export function centerlineStages(
   points: Point3[],
   options: CenterlineOptions,
+  tOpen?: number,
   trace?: CornerTrace[],
 ): CenterlineStages {
   const o = { ...CENTERLINE_DEFAULTS, ...options };
@@ -31,26 +34,29 @@ export function centerlineStages(
     handTol: o.handTol * px,
   };
 
-  const tOpen = options.tOpen;
-  const open = typeof tOpen === "number";
-  const raw = open ? holdEndUntil(points, tOpen) : points;
-
-  if (raw.length === 0) {
-    return { raw, smoothed: [], retimed: [], radius: [], nodes: [] };
+  if (points.length === 0) {
+    return { raw: points, smoothed: [], retimed: [], radius: [], nodes: [] };
   }
 
-  const { samples, arcLengths } = toSmoothSamples(raw, d);
+  const { samples, arcLengths, placed } = toSmoothSamples(points, d);
+  const stable =
+    tOpen == null ? samples.length : stableSamples(samples, arcLengths, placed, d.cornerArm);
   const smoothed = copy(samples);
-  fixBadTimesteps(samples, arcLengths, d);
+  retimeBadTimesteps(samples, arcLengths, d);
+  if (tOpen != null) {
+    const tip = samples[samples.length - 1];
+    tip.tEnd = Math.max(tip.tEnd, tOpen);
+  }
   const retimed = copy(samples);
   varyThickness(samples, arcLengths, d);
   markCorners(samples, arcLengths, d, trace);
 
+  const { body, tail } = fitHand(samples, arcLengths, d, 0, stable);
   return {
-    raw,
+    raw: points,
     smoothed,
     retimed,
     radius: samples,
-    nodes: fitHand(samples, arcLengths, { ...d, open }),
+    nodes: [...body, ...tail],
   };
 }

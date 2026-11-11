@@ -1,11 +1,10 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
+  Centerline,
   CENTERLINE_DEFAULTS,
-  type Centerline,
   type CenterlineOptions,
   type CubicNode,
-  getCenterline,
   holdEndUntil,
   type Point2,
   type Point3,
@@ -20,7 +19,7 @@ import "./centerline.css";
 //
 //   smoothing -> retime -> radius -> corners -> fit
 //
-// -- the library's own `getCenterline`, with the knobs here folded into its
+// -- the library's own `Centerline`, with the knobs here folded into its
 // options -- and the fit comes out as plain
 // Bezier cubics, for drawing and measuring.
 //
@@ -43,7 +42,7 @@ const DEFAULTS = {
   widthLag: CENTERLINE_DEFAULTS.widthLag,
 
   cornerArm: CENTERLINE_DEFAULTS.cornerArm,
-  cornerTurn: 30,
+  cornerTurn: 30, // deg here, rad to the library
   cornerDebug: false,
 
   smoothWindow: CENTERLINE_DEFAULTS.smoothWindow,
@@ -97,17 +96,18 @@ function save(key: string, value: unknown) {
 // The knobs as the library's options, for a stroke drawn at `zoom`. "fixed"
 // radius is min = max width, which holds the radius at the full pen whatever
 // the speed -- pen speed out of the picture when only the path is under study.
-const pipelineOptions = (
-  s: Settings,
-  zoom: number,
-  pts: Point3[],
-  open: boolean,
-): CenterlineOptions => ({
+const pipelineOptions = (s: Settings, zoom: number): CenterlineOptions => ({
   ...s,
   zoom,
   minWidth: s.radius === "fixed" ? s.maxWidth : s.minWidth,
-  tOpen: open && pts.length > 0 ? pts[pts.length - 1].t : null,
+  cornerTurn: s.cornerTurn * DEG,
 });
+
+// open: the pen is still down on the last point
+const tOpen = (pts: Point3[], open: boolean) =>
+  open && pts.length > 0 ? pts[pts.length - 1].t : undefined;
+
+const DEG = Math.PI / 180;
 
 // A node list as Bezier cubics.
 function nodeCubics(ns: CubicNode[]): Cubic[] {
@@ -134,11 +134,9 @@ type Fitted = {
 
 // The stroke as it stood after `fed` samples, through the whole pipeline.
 // `open`: the pen is still down, so more samples are coming.
-const NO_PREV: Centerline = { curves: [], settled: 0 };
-
 function run(stroke: Point3[], fed: number, s: Settings, zoom: number, open: boolean): Fitted {
   const pts = stroke.slice(0, fed);
-  const { curves } = getCenterline(NO_PREV, pts, pipelineOptions(s, zoom, pts, open));
+  const curves = new Centerline(pts, pipelineOptions(s, zoom)).curves(tOpen(pts, open));
   return { cubics: nodeCubics(curves), times: curves.map((n) => n.tStart) };
 }
 
@@ -570,6 +568,10 @@ function Section(props: { title: string; children: ComponentChildren }) {
 
 // --- corner inspector ---
 
+// Past the threshold but not the most-turning sample near it: suppressed.
+const verdict = (r: CornerTrace, thr: number) =>
+  r.corner ? "→ corner" : r.turn >= thr ? "→ suppressed" : "→ not";
+
 // out/in per vertex, log scale, with each vertex's turn below it
 function CornerStrip(props: {
   trace: CornerTrace[];
@@ -600,7 +602,7 @@ function CornerStrip(props: {
     trace.forEach((r, i) => {
       const x = i + 0.5;
       ratio += `${i === 0 ? "M" : "L"}${x} ${y(r.out / r.in)}`;
-      turn += `${i === 0 ? "M" : "L"}${x} ${TH - (r.turn / 180) * TH}`;
+      turn += `${i === 0 ? "M" : "L"}${x} ${TH - (r.turn / Math.PI) * TH}`;
       if (r.corner) corners += `M${x} 0V${H}`;
     });
     return {
@@ -615,6 +617,7 @@ function CornerStrip(props: {
 
   const i = trace.findIndex((r) => r.at === props.probe);
   const row = i === -1 ? null : trace[i];
+  const thr = s.cornerTurn * DEG;
 
   const pick = (e: PointerEvent) => {
     const b = (e.currentTarget as Element).getBoundingClientRect();
@@ -635,8 +638,8 @@ function CornerStrip(props: {
             <span>in {fmt(row.in)}px</span>
             <span>out {fmt(row.out)}px</span>
             <span>×{fmt(row.out / row.in)}</span>
-            <span class={row.turn >= s.cornerTurn ? "ok" : "warn"}>turn {fmt(row.turn, 0)}°</span>
-            <span class={row.corner ? "ok" : "dim"}>{row.corner ? "→ corner" : "→ not"}</span>
+            <span class={row.turn >= thr ? "ok" : "warn"}>turn {fmt(row.turn / DEG, 0)}°</span>
+            <span class={row.corner ? "ok" : "dim"}>{verdict(row, thr)}</span>
           </>
         )}
         <span class="spacer" />
@@ -810,10 +813,11 @@ export function CenterlinePage() {
     // prefix is the stroke as it stood with the pen still down.
     const open = drawing || fed < stroke.length;
     const pts = stroke.slice(0, fed);
-    const o = pipelineOptions(s, drawnZoom, pts, open);
-    const [{ curves }, tCenterline] = timed(() => getCenterline(NO_PREV, pts, o), repeat);
+    const o = pipelineOptions(s, drawnZoom);
+    const t = tOpen(pts, open);
+    const [curves, tCenterline] = timed(() => new Centerline(pts, o).curves(t), repeat);
     const trace: CornerTrace[] = [];
-    const { radius } = centerlineStages(pts, o, trace);
+    const { radius } = centerlineStages(pts, o, t, trace);
     return {
       raw: radius.map((p) => ({ x: p.x, y: p.y, t: p.tStart })),
       radius,
@@ -1366,7 +1370,7 @@ export function CenterlinePage() {
             />
             <Knob
               label="min turn°"
-              title="angle between in chord and out chord at or above this; 0 is off"
+              title="angle between in chord and out chord at or above this, and the most of any sample within arm"
               min={0}
               max={180}
               step={1}
@@ -1570,7 +1574,7 @@ export function CenterlinePage() {
                     </td>
                   </tr>
                 )}
-                <tr title="mean ms per getCenterline call">
+                <tr title="mean ms per Centerline.curves call">
                   <th>ms</th>
                   <td>{fmt(frame.tCenterline, 3)}</td>
                 </tr>

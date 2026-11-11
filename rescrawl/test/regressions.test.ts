@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { getCenterline } from "../src/getCenterline.ts";
+import { Centerline } from "../src/Centerline.ts";
 import { toOutlineNodeQuad } from "../src/outline/node-quad.ts";
 
 // A saved stroke and the bench settings it was saved with, as the library takes
@@ -17,14 +17,15 @@ function sample(file: string) {
   return { raw: d.raw.slice(0, d.fed), options };
 }
 
-const finite = (o: object) => Object.values(o).every((v) => typeof v !== "number" || Number.isFinite(v));
+const finite = (o: object) =>
+  Object.values(o).every((v) => typeof v !== "number" || Number.isFinite(v));
 
 describe("non-finite", () => {
   // Equal-weight smoothing gave two neighbours whose windows held the same
   // samples the same position, and the hand fit divided by the zero step.
   const { raw, options } = sample("2026-11-01T23-25-01-non-finite.json");
   test("every node and contact finite", () => {
-    const { curves } = getCenterline({ curves: [], settled: 0 }, raw, options);
+    const curves = new Centerline(raw, options).curves();
     const outline = toOutlineNodeQuad(curves, options).flat();
     curves.forEach((n, i) => assert.ok(finite(n), `node ${i}: ${JSON.stringify(n)}`));
     outline.forEach((c, i) => assert.ok(finite(c), `contact ${i}: ${JSON.stringify(c)}`));

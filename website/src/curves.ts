@@ -1,9 +1,8 @@
 import {
+  Centerline,
   CENTERLINE_DEFAULTS,
-  type Centerline,
   type CenterlineOptions,
   type CubicNode,
-  getCenterline,
   NODE_QUAD_DEFAULTS,
   type NodeQuadOptions,
   type OutlineNode,
@@ -267,23 +266,20 @@ export const STRATEGY_DEFS: StrategyDef[] = [
 export const INK_COLOR = "#1a1a1a";
 
 // Every length moved to screen px at once (some had been a multiple of the
-// pen), and `engine` had split into `fit` and `outline`. A blob saved
+// pen), `engine` had split into `fit` and `outline`, and `cornerTurn` went
+// from degrees to radians. A blob saved
 // under an older meaning would be wrong, and for several knobs an old value is
 // indistinguishable from a new one, so the key is versioned and stale panel
 // settings are dropped. Strokes are stored separately and are unaffected.
-export const INK_STORAGE_KEY = "rescrawl-ink-4";
+export const INK_STORAGE_KEY = "rescrawl-ink-5";
 
-export type InkOptions = Required<Omit<CenterlineOptions, "tOpen">> & Required<NodeQuadOptions>;
+export type InkOptions = Required<CenterlineOptions> & Required<NodeQuadOptions>;
 
 export const INK_DEFAULTS: InkOptions = { ...CENTERLINE_DEFAULTS, ...NODE_QUAD_DEFAULTS };
 
-const NO_PREV: Centerline = { curves: [], settled: 0 };
-
-const centerlineOptions = (stroke: Stroke, o: InkOptions, pts: Point[], open: boolean) => ({
-  ...o,
-  zoom: stroke.zoom,
-  tOpen: open && pts.length > 0 ? pts[pts.length - 1].t : null,
-});
+// open: the pen is still down on the last point
+const tOpen = (pts: Point[], open: boolean) =>
+  open && pts.length > 0 ? pts[pts.length - 1].t : undefined;
 
 export function renderInk(
   stroke: Stroke,
@@ -293,7 +289,7 @@ export function renderInk(
 ): RenderedLine {
   const pts = elapsedPoints(stroke, t);
   if (!pts.length) return EMPTY;
-  const { curves } = getCenterline(NO_PREV, pts, centerlineOptions(stroke, options, pts, open));
+  const curves = new Centerline(pts, { ...options, zoom: stroke.zoom }).curves(tOpen(pts, open));
   return { shapes: [outlineQuadPath(toOutlineNodeQuad(curves, { ...options, zoom: stroke.zoom }))] };
 }
 
@@ -305,14 +301,15 @@ export function inkStages(
   open = t < strokeEnd(stroke),
 ): { outline: OutlineNode[]; stages: CenterlineStages } {
   const pts = elapsedPoints(stroke, t);
-  const stages = centerlineStages(pts, centerlineOptions(stroke, options, pts, open));
+  const stages = centerlineStages(pts, { ...options, zoom: stroke.zoom }, tOpen(pts, open));
   const pieces = toOutlineNodeQuad(stages.nodes, { ...options, zoom: stroke.zoom });
   return { outline: pieces.flat(), stages };
 }
 
 export function strokeStages(stroke: Stroke, options: InkOptions, t: number): CenterlineStages {
   const pts = elapsedPoints(stroke, t);
-  return centerlineStages(pts, centerlineOptions(stroke, options, pts, t < strokeEnd(stroke)));
+  const open = t < strokeEnd(stroke);
+  return centerlineStages(pts, { ...options, zoom: stroke.zoom }, tOpen(pts, open));
 }
 
 type NumberKeys<T> = { [K in keyof T]-?: T[K] extends number ? K : never }[keyof T];
@@ -374,10 +371,10 @@ export const INK_SECTIONS: InkSection[] = [
       },
       {
         key: "cornerTurn",
-        label: "corner turn (deg)",
+        label: "corner turn (rad)",
         min: 0,
-        max: 180,
-        step: 1,
+        max: 3.14,
+        step: 0.01,
       },
     ],
   },

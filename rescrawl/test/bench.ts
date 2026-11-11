@@ -1,4 +1,4 @@
-import { getCenterline } from "../src/getCenterline.ts";
+import { Centerline } from "../src/Centerline.ts";
 import type { Point3 } from "../src/math.ts";
 import { toOutlineNodeQuad } from "../src/outline/node-quad.ts";
 import { discCoverage } from "./geometry.ts";
@@ -11,7 +11,7 @@ import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 const REPEATS = 30;
 
 function renderStroke(pts: Point3[]) {
-  const { curves } = getCenterline({ curves: [], settled: 0 }, pts, {});
+  const curves = new Centerline(pts, {}).curves();
   return { curves, outline: toOutlineNodeQuad(curves, {}) };
 }
 

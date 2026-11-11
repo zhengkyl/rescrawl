@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { fixBadTimesteps, holdEndUntil } from "../src/centerline/retime.ts";
+import { holdEndUntil, retimeBadTimesteps } from "../src/centerline/retime.ts";
 import { type Sample, toSmoothSamples } from "../src/centerline/smooth.ts";
 import { dist, type Point3 } from "../src/math.ts";
 
@@ -13,7 +13,7 @@ const line = (ts: number[]): Point3[] => ts.map((t, i) => ({ x: i * 10, y: 0, t 
 const xt = (pts: Sample[]) => pts.map((p) => [p.x, +p.tStart.toFixed(1), +p.tEnd.toFixed(1)]);
 const run = (pts: Point3[], o: { framePeriod: number; minMove: number } = O) => {
   const { samples, arcLengths } = toSmoothSamples(pts, { smoothWindow: 0, minMove: o.minMove });
-  fixBadTimesteps(samples, arcLengths, o);
+  retimeBadTimesteps(samples, arcLengths, o);
   return samples;
 };
 
@@ -36,11 +36,23 @@ describe("retime", () => {
     ]);
   });
 
-  test("pulls a late stamp back to the ones after it", () => {
+  test("raises an early stamp to the one before it, sharing its frame", () => {
     assert.deepEqual(
-      run(line([0, 16, 32, 500, 48, 64])).map((p) => p.tStart),
-      [0, 16, 32, 40, 48, 64],
+      run(line([0, 16, 32, 24, 48])).map((p) => p.tStart),
+      [0, 16, 24, 32, 48],
     );
+  });
+
+  // the cost of never moving old samples: a late stamp drags the ones after it
+  test("a late stamp holds the ones after it, not the ones before", () => {
+    assert.deepEqual(xt(run(line([0, 16, 32, 500, 48, 64]))), [
+      [0, 0, 0],
+      [10, 16, 16],
+      [20, 32, 484],
+      [30, 489.3, 489.3],
+      [40, 494.7, 494.7],
+      [50, 500, 500],
+    ]);
   });
 
   test("a pause: the pen sat until one frame before the next sample", () => {
