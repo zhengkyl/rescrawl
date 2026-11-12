@@ -26,63 +26,55 @@ export function markCorners(
   const arm = o.cornerArm;
 
   const turns = new Float64Array(n).fill(-1);
+  const scores = new Float64Array(n).fill(-1);
   const rows: CornerTrace[] = [];
 
-  // Each chord reaches past `arm`, so neither has zero length.
+  let prev = -1;
+  let next = 0;
   for (let i = 1; i < n - 1; i++) {
-    const currS = arcLengths[i];
-    let pi = i - 1;
-    for (; pi >= 0; pi--) {
-      if (currS - arcLengths[pi] > arm) break;
-    }
-    if (pi === -1) continue;
+    const s = arcLengths[i];
+    while (prev + 1 < i && s - arcLengths[prev + 1] > arm) prev++;
+    while (next < n && arcLengths[next] - s <= arm) next++;
+    if (prev === -1) continue;
+    if (next === n) break;
 
-    let ni = i + 1;
-    for (; ni < samples.length; ni++) {
-      if (arcLengths[ni] - currS > arm) break;
-    }
-    if (ni === samples.length) continue;
-
-    const a = samples[pi];
+    const a = samples[prev];
     const p = samples[i];
-    const b = samples[ni];
-    const cin = dist(a, p);
-    const cout = dist(p, b);
-    const cos = ((p.x - a.x) * (b.x - p.x) + (p.y - a.y) * (b.y - p.y)) / (cin * cout);
+    const b = samples[next];
+    const chordIn = dist(a, p);
+    const chordOut = dist(p, b);
+    const cos = ((p.x - a.x) * (b.x - p.x) + (p.y - a.y) * (b.y - p.y)) / (chordIn * chordOut);
     const turn = Math.acos(clamp11(cos));
+
+    // chord / arcLength measures how straight arm is
+    const straight = (chordIn / (s - arcLengths[prev])) * (chordOut / (arcLengths[next] - s));
+
     turns[i] = turn;
-    rows.push({
-      at: i,
-      prev: pi,
-      next: ni,
-      in: cin,
-      out: cout,
-      turn,
-      corner: false,
-    });
+    scores[i] = turn * straight;
+    if (trace !== undefined) {
+      rows.push({ at: i, prev, next, in: chordIn, out: chordOut, turn, corner: false });
+    }
   }
 
-  // Every sample near a corner turns past the threshold; only the one that
-  // turns most is the corner. It must beat every turn within `arm` of arc
-  // length, and always the samples either side. A plateau goes to its first
-  // sample. Final once samples reach `2 * arm` past it.
-  for (const row of rows) {
-    const i = row.at;
-    const turn = turns[i];
-    if (turn < o.cornerTurn) continue;
-    let peak = true;
-    for (let j = i - 1; j >= 0 && peak; j--) {
-      if (j < i - 1 && arcLengths[i] - arcLengths[j] > arm) break;
-      peak = turns[j] < turn;
-    }
-    for (let j = i + 1; j < n && peak; j++) {
-      if (j > i + 1 && arcLengths[j] - arcLengths[i] > arm) break;
-      peak = turns[j] <= turn;
-    }
-    if (!peak) continue;
-    row.corner = true;
+  for (let i = 1; i < n - 1; i++) {
+    if (turns[i] < o.cornerTurn) continue;
+    if (!isPeak(scores, arcLengths, i, arm)) continue;
     samples[i].corner = true;
   }
 
-  trace?.push(...rows);
+  if (trace !== undefined) {
+    for (const row of rows) row.corner = samples[row.at].corner;
+    trace.push(...rows);
+  }
+}
+
+function isPeak(scores: Float64Array, arcLengths: Float64Array, i: number, arm: number) {
+  const score = scores[i];
+  for (let j = i - 1; j >= 0 && arcLengths[i] - arcLengths[j] <= arm; j--) {
+    if (scores[j] >= score) return false;
+  }
+  for (let j = i + 1; j < scores.length && arcLengths[j] - arcLengths[i] <= arm; j++) {
+    if (scores[j] > score) return false;
+  }
+  return true;
 }

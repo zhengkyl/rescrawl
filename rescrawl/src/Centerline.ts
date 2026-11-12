@@ -75,7 +75,7 @@ export function stableSamples(
   while (turned >= 0 && arcLengths[placed] - arcLengths[turned] <= cornerArm) turned--;
   if (turned < 0) return 0;
 
-  // corner[i] compares turns within cornerArm past i, and always i + 1
+  // corner[i] compares scores within cornerArm past i
   let corner = turned;
   while (corner > 0 && arcLengths[turned + 1] - arcLengths[corner - 1] <= cornerArm) corner--;
 
