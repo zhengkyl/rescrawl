@@ -3,10 +3,10 @@ import {
   CENTERLINE_DEFAULTS,
   type CenterlineOptions,
   type CubicNode,
-  NODE_CUBIC_DEFAULTS,
-  type NodeCubicOptions,
+  Outline,
+  OUTLINE_DEFAULTS,
   type OutlineNode,
-  toOutlineNodeCubic,
+  type OutlineOptions,
 } from "rescrawl";
 import { fitPath, outlineCubicPath } from "rescrawl/svg";
 import { type CenterlineStages, centerlineStages } from "./stages";
@@ -273,9 +273,9 @@ export const INK_COLOR = "#1a1a1a";
 // settings are dropped. Strokes are stored separately and are unaffected.
 export const INK_STORAGE_KEY = "rescrawl-ink-6";
 
-export type InkOptions = Required<CenterlineOptions> & Required<NodeCubicOptions>;
+export type InkOptions = Required<CenterlineOptions> & Required<OutlineOptions>;
 
-export const INK_DEFAULTS: InkOptions = { ...CENTERLINE_DEFAULTS, ...NODE_CUBIC_DEFAULTS };
+export const INK_DEFAULTS: InkOptions = { ...CENTERLINE_DEFAULTS, ...OUTLINE_DEFAULTS };
 
 // open: the pen is still down on the last point
 const tOpen = (pts: Point[], open: boolean) =>
@@ -291,7 +291,7 @@ export function renderInk(
   if (!pts.length) return EMPTY;
   const curves = new Centerline(pts, { ...options, zoom: stroke.zoom }).curves(tOpen(pts, open));
   return {
-    shapes: [outlineCubicPath(toOutlineNodeCubic(curves, { ...options, zoom: stroke.zoom }))],
+    shapes: [outlineCubicPath(new Outline({ ...options, zoom: stroke.zoom }).pieces(curves))],
   };
 }
 
@@ -304,7 +304,7 @@ export function inkStages(
 ): { outline: OutlineNode[]; stages: CenterlineStages } {
   const pts = elapsedPoints(stroke, t);
   const stages = centerlineStages(pts, { ...options, zoom: stroke.zoom }, tOpen(pts, open));
-  const pieces = toOutlineNodeCubic(stages.nodes, { ...options, zoom: stroke.zoom });
+  const pieces = new Outline({ ...options, zoom: stroke.zoom }).pieces(stages.nodes);
   return { outline: pieces.flat(), stages };
 }
 

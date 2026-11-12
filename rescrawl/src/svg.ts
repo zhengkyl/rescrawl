@@ -128,8 +128,8 @@ export function outlineCubicPath(pieces: OutlineNode[][], digits = DEFAULT_DIGIT
     for (let i = 0; i < n; i++) {
       const a = cs[i];
       const b = cs[(i + 1) % n];
-      // handles on the two ends: a straight stretch
-      if (a.c1x === a.x && a.c1y === a.y && a.c2x === b.x && a.c2y === b.y) pen.lineTo(b.x, b.y);
+      // first handle on its own point: a straight stretch
+      if (a.c1x === a.x && a.c1y === a.y) pen.lineTo(b.x, b.y);
       else pen.curveTo(a.c1x, a.c1y, a.c2x, a.c2y, b.x, b.y);
     }
     pen.close();

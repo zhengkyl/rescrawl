@@ -1,6 +1,6 @@
 import { Centerline } from "../src/Centerline.ts";
 import type { Point3 } from "../src/math.ts";
-import { toOutlineNodeCubic } from "../src/Outline.ts";
+import { Outline } from "../src/Outline.ts";
 import { discCoverage } from "./geometry.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 
@@ -12,7 +12,7 @@ const REPEATS = 30;
 
 function renderStroke(pts: Point3[]) {
   const curves = new Centerline(pts, {}).curves();
-  return { curves, outline: toOutlineNodeCubic(curves, {}) };
+  return { curves, outline: new Outline({}).pieces(curves) };
 }
 
 function ms(run: () => void): number {

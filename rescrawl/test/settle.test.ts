@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { isDeepStrictEqual } from "node:util";
 import { Centerline, stableSamples } from "../src/Centerline.ts";
+import { Outline } from "../src/Outline.ts";
 import { markCorners } from "../src/centerline/corner.ts";
 import { retimeBadTimesteps } from "../src/centerline/retime.ts";
 import { toSmoothSamples } from "../src/centerline/smooth.ts";
@@ -75,7 +76,7 @@ describe("settled ink is what a single pass draws", () => {
       for (const frame of frames(raw)) {
         for (const p of frame) live.update(p);
         live.curves(frame[0].t);
-        settledWhileOpen = live["settled"].length;
+        settledWhileOpen = live.settledCount();
       }
       const drawn = live.curves();
 
@@ -85,6 +86,38 @@ describe("settled ink is what a single pass draws", () => {
       const i = drawn.findIndex((n, i) => !isDeepStrictEqual(n, once[i]));
       assert.equal(i, -1, `node ${i} of ${once.length}, ${settledWhileOpen} settled while open`);
       if (once.length > 10) assert.ok(settledWhileOpen > 0, "nothing settled while drawing");
+    });
+  }
+});
+
+describe("the resumed outline is what a single pass draws", () => {
+  for (const file of files) {
+    test(file, () => {
+      const { raw, options } = sample(file);
+
+      const live = new Centerline([], options);
+      const outline = new Outline(options);
+      // every piece that was called settled while drawing, as it was then
+      const settled: unknown[] = [];
+      for (const frame of frames(raw)) {
+        for (const p of frame) live.update(p);
+        const pieces = outline.pieces(live.curves(frame[0].t), live.settledCount());
+        for (let i = settled.length; i < outline.settledCount(); i++) {
+          settled.push(structuredClone(pieces[i]));
+        }
+      }
+      const nodes = live.curves();
+      const drawn = outline.pieces(nodes, live.settledCount());
+
+      const once = new Outline(options).pieces(new Centerline([...raw], options).curves());
+
+      assert.equal(drawn.length, once.length, "piece count");
+      const i = drawn.findIndex((p, i) => !isDeepStrictEqual(p, once[i]));
+      assert.equal(i, -1, `piece ${i} of ${once.length}`);
+      const j = settled.findIndex((p, i) => !isDeepStrictEqual(p, once[i]));
+      assert.equal(j, -1, `piece ${j} changed after it was settled`);
+      assert.equal(outline.settledCount(), once.length, "pieces left unsettled at the end");
+      if (once.length > 3) assert.ok(settled.length > 0, "nothing settled while drawing");
     });
   }
 });

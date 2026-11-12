@@ -4,8 +4,8 @@ export { holdEndUntil } from "./centerline/retime.ts";
 export type { Sample } from "./centerline/smooth.ts";
 export type { Point2, Point3 } from "./math.ts";
 export {
-  NODE_CUBIC_DEFAULTS,
-  toOutlineNodeCubic,
-  type NodeCubicOptions,
+  Outline,
+  OUTLINE_DEFAULTS,
   type OutlineNode,
+  type OutlineOptions,
 } from "./Outline.ts";

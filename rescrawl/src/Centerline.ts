@@ -34,6 +34,11 @@ export class Centerline {
   update(point: Point3) {
     this.points.push(point);
   }
+  // Nodes at the front of the last `curves()` that can no longer change. That
+  // many segments are final too, and so is the node they end on.
+  settledCount(): number {
+    return this.settled.length;
+  }
   curves(tOpen?: number): CubicNode[] {
     if (this.points.length === 0) return [];
 
