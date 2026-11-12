@@ -3,12 +3,12 @@ import {
   CENTERLINE_DEFAULTS,
   type CenterlineOptions,
   type CubicNode,
-  NODE_QUAD_DEFAULTS,
-  type NodeQuadOptions,
+  NODE_CUBIC_DEFAULTS,
+  type NodeCubicOptions,
   type OutlineNode,
-  toOutlineNodeQuad,
+  toOutlineNodeCubic,
 } from "rescrawl";
-import { fitPath, outlineQuadPath } from "rescrawl/svg";
+import { fitPath, outlineCubicPath } from "rescrawl/svg";
 import { type CenterlineStages, centerlineStages } from "./stages";
 import type { Point, Stroke } from "./utils";
 import { elapsedPoints, strokeEnd } from "./utils";
@@ -271,11 +271,11 @@ export const INK_COLOR = "#1a1a1a";
 // under an older meaning would be wrong, and for several knobs an old value is
 // indistinguishable from a new one, so the key is versioned and stale panel
 // settings are dropped. Strokes are stored separately and are unaffected.
-export const INK_STORAGE_KEY = "rescrawl-ink-5";
+export const INK_STORAGE_KEY = "rescrawl-ink-6";
 
-export type InkOptions = Required<CenterlineOptions> & Required<NodeQuadOptions>;
+export type InkOptions = Required<CenterlineOptions> & Required<NodeCubicOptions>;
 
-export const INK_DEFAULTS: InkOptions = { ...CENTERLINE_DEFAULTS, ...NODE_QUAD_DEFAULTS };
+export const INK_DEFAULTS: InkOptions = { ...CENTERLINE_DEFAULTS, ...NODE_CUBIC_DEFAULTS };
 
 // open: the pen is still down on the last point
 const tOpen = (pts: Point[], open: boolean) =>
@@ -290,7 +290,9 @@ export function renderInk(
   const pts = elapsedPoints(stroke, t);
   if (!pts.length) return EMPTY;
   const curves = new Centerline(pts, { ...options, zoom: stroke.zoom }).curves(tOpen(pts, open));
-  return { shapes: [outlineQuadPath(toOutlineNodeQuad(curves, { ...options, zoom: stroke.zoom }))] };
+  return {
+    shapes: [outlineCubicPath(toOutlineNodeCubic(curves, { ...options, zoom: stroke.zoom }))],
+  };
 }
 
 // Every stage for one stroke as of `t`, plus the outline the overlay can mark.
@@ -302,7 +304,7 @@ export function inkStages(
 ): { outline: OutlineNode[]; stages: CenterlineStages } {
   const pts = elapsedPoints(stroke, t);
   const stages = centerlineStages(pts, { ...options, zoom: stroke.zoom }, tOpen(pts, open));
-  const pieces = toOutlineNodeQuad(stages.nodes, { ...options, zoom: stroke.zoom });
+  const pieces = toOutlineNodeCubic(stages.nodes, { ...options, zoom: stroke.zoom });
   return { outline: pieces.flat(), stages };
 }
 
@@ -397,21 +399,20 @@ export const INK_SECTIONS: InkSection[] = [
         step: 0.05,
       },
       // How far the drawn outline may stray from the envelope: a segment's side
-      // splits at its midpoint until one quadratic is this close.
+      // splits at its midpoint until one cubic is this close.
       {
-        key: "quadTol",
-        label: "quad tol (screen px)",
+        key: "outlineTol",
+        label: "outline tol (screen px)",
         min: 0.04,
         max: 2,
         step: 0.01,
       },
-      // The floor under that: at a cusp on the inner offset the error never
-      // clears, so the split has to stop somewhere.
+      // A backstop: a span stops splitting once it is shorter than the tolerance.
       {
-        key: "quadDepth",
-        label: "quad depth (splits)",
+        key: "outlineDepth",
+        label: "outline depth (splits)",
         min: 0,
-        max: 10,
+        max: 16,
         step: 1,
       },
     ],

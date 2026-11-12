@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { Centerline } from "../src/Centerline.ts";
 import type { Point3 } from "../src/math.ts";
-import { toOutlineNodeQuad } from "../src/outline/node-quad.ts";
+import { toOutlineNodeCubic } from "../src/Outline.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
 
 const outline = (pts: Point3[], o: { minWidth: number; maxWidth: number; zoom: number }) =>
-  toOutlineNodeQuad(new Centerline(pts, o).curves(), o).flat();
+  toOutlineNodeCubic(new Centerline(pts, o).curves(), o).flat();
 
 // Drawing at another zoom is drawing with the pen scaled to match: the same
 // hand motion must lay the same ink on screen. At half the zoom the same screen

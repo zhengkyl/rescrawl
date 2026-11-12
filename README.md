@@ -11,6 +11,7 @@ Originally made for this blog post https://kylezhe.ng/writes/shakespeares-sonnet
 ### The pipeline
 
 A Primer on Bézier Curves
+
 - https://pomax.github.io/bezierinfo/index.html
 
 https://raphlinus.github.io/curves/2022/09/09/parallel-beziers.html

@@ -2,12 +2,7 @@ import { batch } from "@preact/signals";
 import { useEffect, useState } from "preact/hooks";
 import { AppContext } from "../context";
 import type { DebugLayers, InkOptions, StrategiesState } from "../curves";
-import {
-  DEBUG_DEFAULTS,
-  getDefaultStrategies,
-  INK_DEFAULTS,
-  INK_STORAGE_KEY,
-} from "../curves";
+import { DEBUG_DEFAULTS, getDefaultStrategies, INK_DEFAULTS, INK_STORAGE_KEY } from "../curves";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { usePlayhead } from "../hooks/usePlayhead";
 import { applyStrokeOp, useStrokes } from "../strokeStore";

@@ -47,7 +47,6 @@ const DEFAULTS = {
 
   smoothWindow: CENTERLINE_DEFAULTS.smoothWindow,
 
-
   handTol: CENTERLINE_DEFAULTS.handTol,
   reparam: 2,
 
@@ -88,7 +87,7 @@ function load<T>(key: string, fallback: T): T {
 function save(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-  } catch { }
+  } catch {}
 }
 
 // --- the pipeline ---
@@ -643,9 +642,7 @@ function CornerStrip(props: {
           </>
         )}
         <span class="spacer" />
-        <span class="dim">
-          need {s.cornerTurn}°
-        </span>
+        <span class="dim">need {s.cornerTurn}°</span>
       </div>
       <div class="strip-plot">
         <span class="strip-axis">
@@ -798,10 +795,7 @@ export function CenterlinePage() {
     if (!s.showOnion) return [];
     const out: string[] = [];
     for (let j = 1; j <= s.onionFrames && fed - j >= 1; j++) {
-      const cubics =
-        j === 1
-          ? ghost.cubics
-          : run(stroke, fed - j, s, drawnZoom, true).cubics;
+      const cubics = j === 1 ? ghost.cubics : run(stroke, fed - j, s, drawnZoom, true).cubics;
       out.push(cubicsPath(cubics));
     }
     return out;
@@ -939,7 +933,11 @@ export function CenterlinePage() {
   // The curve as a hairline, or as wide as the pen in content px, so it grows
   // with the zoom like the ink would.
   const curveStroke = s.curveAtWidth
-    ? ({ "stroke-width": s.maxWidth, "stroke-linecap": "round", "stroke-linejoin": "round" } as const)
+    ? ({
+        "stroke-width": s.maxWidth,
+        "stroke-linecap": "round",
+        "stroke-linejoin": "round",
+      } as const)
     : ({ "stroke-width": 2, "vector-effect": "non-scaling-stroke" } as const);
 
   const layers = useMemo(() => {
@@ -1011,10 +1009,10 @@ export function CenterlinePage() {
       setMeta(
         typeof data.pointerType === "string"
           ? {
-            pointerType: data.pointerType,
-            zoom: data.zoom ?? 1,
-            coalesced: data.coalesced === true,
-          }
+              pointerType: data.pointerType,
+              zoom: data.zoom ?? 1,
+              coalesced: data.coalesced === true,
+            }
           : null,
       );
     } catch {
@@ -1034,7 +1032,7 @@ export function CenterlinePage() {
   async function paste() {
     try {
       importText(await navigator.clipboard.readText());
-    } catch { }
+    } catch {}
   }
 
   // Everything needed to replay this frame outside the page: the fed samples
@@ -1493,8 +1491,8 @@ export function CenterlinePage() {
               onInput={(replaySpeed) => set({ replaySpeed })}
             />
             <p class="note">
-              each segment runs from its start node's t to its end node's t at constant speed;
-              scrub or play the pens from the bar below
+              each segment runs from its start node's t to its end node's t at constant speed; scrub
+              or play the pens from the bar below
             </p>
           </Section>
 

@@ -2,25 +2,21 @@ Turning pen or mouse movement into a beautifully rendered stroke requires two ma
 
 For efficient storage and replay, converting the input points into a vector path
 
-
 When drawing digitally, the pen or mouse position is reported at a regular frequency, perhaps a few hundred times per second. Connecting all these points with straight lines is simple, but the result will not be smooth. In fast sections the points are too sparse for straight lines to approximate curves, and in slow sections the dense points contain unintentional jitter.
 
 Not to mention that the list of timestamped positions is a landmine-laden landfill. The positions have to be filtered, smoothed, and deduplicated. Timestamps are consistantly inconsistant; multiple positions sharing a timestamp or even negative time steps have to be reinterpreted. Like a paleontologist, we must carefully excavate the user's intent from a matrix of refuse.
 
-For efficient storage and replay, converting the input points into a bezier spline is a fundamental decision. A spline is made of multiple curves, which each can represent a section of the drawn path with only a few control points. 
+For efficient storage and replay, converting the input points into a bezier spline is a fundamental decision. A spline is made of multiple curves, which each can represent a section of the drawn path with only a few control points.
 
- To render strokes beautifully, the input must first be smoothed and then used to calculate a well-fitting curve. For realtime drawing, there are further constraints: old parts of the curve cannot noticeably move, and it must run quickly. 
+To render strokes beautifully, the input must first be smoothed and then used to calculate a well-fitting curve. For realtime drawing, there are further constraints: old parts of the curve cannot noticeably move, and it must run quickly.
 
-
-Success means continuously converting uncompressed raw points into efficient smooth paths without the user any the wiser. 
-
+Success means continuously converting uncompressed raw points into efficient smooth paths without the user any the wiser.
 
 Each sample is roughly equidistant in time, after for accounting for stops
 
 Should smoothing happen based on distance or time? Distance is actually ~velocity. small = slow or stops, large = fast
 
 ## Curve fitting
-
 
 ### Input
 

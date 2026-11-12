@@ -1,9 +1,9 @@
-import { dist, type Point3, quadControl } from "../src/math.ts";
-import type { OutlineNode } from "../src/outline/contact.ts";
+import { dist, type Point3 } from "../src/math.ts";
+import type { OutlineNode } from "../src/Outline.ts";
 
 type Poly = { x: number; y: number }[];
 
-// Each piece as `outlineQuadPath` draws it, flattened to a dense polygon.
+// Each piece as `outlineCubicPath` draws it, flattened to a dense polygon.
 // Testing against the contacts alone reports failures that are not real.
 export function outlinePolygons(pieces: OutlineNode[][], step = 0.25): Poly[] {
   return pieces.map((cs) => {
@@ -11,17 +11,13 @@ export function outlinePolygons(pieces: OutlineNode[][], step = 0.25): Poly[] {
     for (let i = 0; i < cs.length; i++) {
       const a = cs[i];
       const b = cs[(i + 1) % cs.length];
-      const q = quadControl(a.x, a.y, a.tx, a.ty, b.x, b.y, b.tx, b.ty) ?? {
-        x: (a.x + b.x) / 2,
-        y: (a.y + b.y) / 2,
-      };
       const n = Math.max(3, Math.ceil((dist(a, b) + 1) / step));
       for (let j = 0; j < n; j++) {
         const u = j / n;
         const v = 1 - u;
         out.push({
-          x: v * v * a.x + 2 * v * u * q.x + u * u * b.x,
-          y: v * v * a.y + 2 * v * u * q.y + u * u * b.y,
+          x: v * v * v * a.x + 3 * v * v * u * a.c1x + 3 * v * u * u * a.c2x + u * u * u * b.x,
+          y: v * v * v * a.y + 3 * v * v * u * a.c1y + 3 * v * u * u * a.c2y + u * u * u * b.y,
         });
       }
     }
@@ -59,7 +55,8 @@ export function discCoverage(
     for (let k = 0; k < rim; k++) {
       const a = (2 * Math.PI * k) / rim;
       // 0.95 out: a point exactly on the rim is a coin toss for any winding test.
-      if (contains(polys, nd.x + Math.cos(a) * nd.r * 0.95, nd.y + Math.sin(a) * nd.r * 0.95)) hit++;
+      if (contains(polys, nd.x + Math.cos(a) * nd.r * 0.95, nd.y + Math.sin(a) * nd.r * 0.95))
+        hit++;
     }
     if (hit / rim < worst) {
       worst = hit / rim;

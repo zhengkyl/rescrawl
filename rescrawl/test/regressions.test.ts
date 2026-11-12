@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { Centerline } from "../src/Centerline.ts";
-import { toOutlineNodeQuad } from "../src/outline/node-quad.ts";
+import { toOutlineNodeCubic } from "../src/Outline.ts";
 
 // A saved stroke and the bench settings it was saved with, as the library takes
 // them: "average" smoothing is the window, "none" is 0.
@@ -26,7 +26,7 @@ describe("non-finite", () => {
   const { raw, options } = sample("2026-11-01T23-25-01-non-finite.json");
   test("every node and contact finite", () => {
     const curves = new Centerline(raw, options).curves();
-    const outline = toOutlineNodeQuad(curves, options).flat();
+    const outline = toOutlineNodeCubic(curves, options).flat();
     curves.forEach((n, i) => assert.ok(finite(n), `node ${i}: ${JSON.stringify(n)}`));
     outline.forEach((c, i) => assert.ok(finite(c), `contact ${i}: ${JSON.stringify(c)}`));
   });
