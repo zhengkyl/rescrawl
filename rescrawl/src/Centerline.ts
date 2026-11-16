@@ -46,7 +46,9 @@ export class Centerline {
     const o = this.options;
 
     const { samples, arcLengths, placed } = toSmoothSamples(this.points, o);
-
+    // reads the frames by their shared stamps, before retiming spreads them
+    const stable =
+      tOpen == null ? samples.length : stableSamples(samples, arcLengths, placed, o.cornerArm);
     retimeBadTimesteps(samples, arcLengths, o);
     markCorners(samples, arcLengths, o);
 
@@ -56,8 +58,6 @@ export class Centerline {
     }
     varyThickness(samples, arcLengths, o);
 
-    const stable =
-      tOpen == null ? samples.length : stableSamples(samples, arcLengths, placed, o.cornerArm);
     const fit = fitHand(samples, arcLengths, o, this.resume, stable);
     this.settled.push(...fit.body);
     this.resume = fit.resume;
@@ -109,4 +109,5 @@ export const CENTERLINE_DEFAULTS: Required<CenterlineOptions> = {
   cornerTurn: Math.PI / 2,
   handTol: 0.8,
   reparam: 2,
+  settleTime: 150,
 };

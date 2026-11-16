@@ -21,6 +21,7 @@ export type CubicNode = {
 export type HandOptions = {
   handTol?: number; // px a sample may lie off the segment
   reparam?: number; // rounds of moving each sample's u to the nearest point, then solving again
+  settleTime?: number; // most ms of drawing one segment may span
 };
 
 type ResumableFit = { body: CubicNode[]; tail: CubicNode[]; resume: number };
@@ -32,7 +33,7 @@ type ResumableFit = { body: CubicNode[]; tail: CubicNode[]; resume: number };
 export function fitHand(
   samples: Sample[],
   arcLengths: Float64Array,
-  o: { handTol: number; reparam: number },
+  o: { handTol: number; reparam: number; settleTime: number },
   start = 0,
   stable = 0,
 ): ResumableFit {
@@ -124,6 +125,7 @@ export function fitHand(
     let b = a + 1;
 
     while (b <= end && (b - 1 === a || !samples[b - 1].corner)) {
+      if (b - 1 !== a && samples[b].tStart - samples[a].tEnd > o.settleTime) break;
       const arc = arcLengths[b] - arcLengths[a];
 
       const dx = x[b] - x[a];
