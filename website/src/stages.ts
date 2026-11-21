@@ -1,5 +1,5 @@
 import { CENTERLINE_DEFAULTS, type CenterlineOptions, type CubicNode, type Point3 } from "rescrawl";
-import { type CornerTrace, markCorners } from "rescrawl/centerline/corner";
+import { markCorners } from "rescrawl/centerline/corner";
 import { fitHand } from "rescrawl/centerline/fit";
 import { retimeBadTimesteps } from "rescrawl/centerline/retime";
 import { type Sample, toSmoothSamples } from "rescrawl/centerline/smooth";
@@ -21,7 +21,6 @@ export function centerlineStages(
   points: Point3[],
   options: CenterlineOptions,
   tOpen?: number,
-  trace?: CornerTrace[],
 ): CenterlineStages {
   const o = { ...CENTERLINE_DEFAULTS, ...options };
   const px = 1 / o.zoom;
@@ -49,7 +48,7 @@ export function centerlineStages(
   }
   const retimed = copy(samples);
   varyThickness(samples, arcLengths, d);
-  markCorners(samples, arcLengths, d, trace);
+  markCorners(samples, d);
 
   const { body, tail } = fitHand(samples, arcLengths, d, 0, stable);
   return {

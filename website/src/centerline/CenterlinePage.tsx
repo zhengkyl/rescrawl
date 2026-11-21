@@ -9,7 +9,6 @@ import {
   type Point2,
   type Point3,
 } from "rescrawl";
-import type { CornerTrace } from "rescrawl/centerline/corner";
 import { centerlineStages } from "../stages";
 import { deserialize } from "../utils";
 import "./centerline.css";
@@ -43,7 +42,6 @@ const DEFAULTS = {
 
   cornerArm: CENTERLINE_DEFAULTS.cornerArm,
   cornerTurn: 30, // deg here, rad to the library
-  cornerDebug: false,
 
   smoothWindow: CENTERLINE_DEFAULTS.smoothWindow,
 
@@ -470,7 +468,6 @@ const CURVE_COLOR = "#2563eb";
 // Earlier frames, one colour whatever the segments, fading with age.
 const ONION_COLOR = "#0d9488";
 const CORNER_COLOR = "#c026d3";
-const PROBE_COLOR = "#ea580c";
 // The replayed pen, and its offsets from the raw samples.
 const REPLAY_COLOR = "#0891b2";
 
@@ -565,179 +562,6 @@ function Section(props: { title: string; children: ComponentChildren }) {
   );
 }
 
-// --- corner inspector ---
-
-// Past the threshold but not the most-turning sample near it: suppressed.
-const verdict = (r: CornerTrace, thr: number) =>
-  r.corner ? "→ corner" : r.turn >= thr ? "→ suppressed" : "→ not";
-
-// out/in per vertex, log scale, with each vertex's turn below it
-function CornerStrip(props: {
-  trace: CornerTrace[];
-  s: Settings;
-  probe: number | null;
-  onProbe: (at: number) => void;
-}) {
-  const { trace, s } = props;
-  const N = trace.length;
-  const H = 110;
-  const TH = 40;
-
-  const plot = useMemo(() => {
-    let lo = 1;
-    let hi = 1;
-    for (const r of trace) {
-      lo = Math.min(lo, r.out / r.in);
-      hi = Math.max(hi, r.out / r.in);
-    }
-    // ratio 1 makes lo === hi
-    const L0 = Math.log(lo);
-    const L1 = Math.max(Math.log(hi), L0 + Math.log(10));
-    const y = (v: number) => H - ((Math.log(v) - L0) / (L1 - L0)) * H;
-
-    let ratio = "";
-    let corners = "";
-    let turn = "";
-    trace.forEach((r, i) => {
-      const x = i + 0.5;
-      ratio += `${i === 0 ? "M" : "L"}${x} ${y(r.out / r.in)}`;
-      turn += `${i === 0 ? "M" : "L"}${x} ${TH - (r.turn / Math.PI) * TH}`;
-      if (r.corner) corners += `M${x} 0V${H}`;
-    });
-    return {
-      ratio,
-      corners,
-      one: `M0 ${y(1)}H${N}`,
-      turn,
-      lo,
-      hi: Math.exp(L1),
-    };
-  }, [trace]);
-
-  const i = trace.findIndex((r) => r.at === props.probe);
-  const row = i === -1 ? null : trace[i];
-  const thr = s.cornerTurn * DEG;
-
-  const pick = (e: PointerEvent) => {
-    const b = (e.currentTarget as Element).getBoundingClientRect();
-    const j = Math.floor(((e.clientX - b.left) / b.width) * N);
-    if (j >= 0 && j < N) props.onProbe(trace[j].at);
-  };
-
-  return (
-    <div class="strip">
-      <div class="strip-head">
-        {row === null ? (
-          <span class="dim">no vertex probed</span>
-        ) : (
-          <>
-            <span>
-              vertex {i + 1}/{N} <span class="dim">(sample {row.at})</span>
-            </span>
-            <span>in {fmt(row.in)}px</span>
-            <span>out {fmt(row.out)}px</span>
-            <span>×{fmt(row.out / row.in)}</span>
-            <span class={row.turn >= thr ? "ok" : "warn"}>turn {fmt(row.turn / DEG, 0)}°</span>
-            <span class={row.corner ? "ok" : "dim"}>{verdict(row, thr)}</span>
-          </>
-        )}
-        <span class="spacer" />
-        <span class="dim">need {s.cornerTurn}°</span>
-      </div>
-      <div class="strip-plot">
-        <span class="strip-axis">
-          <span>×{fmt(plot.hi, 1)}</span>
-          <span>out/in</span>
-          <span>×{fmt(plot.lo, 2)}</span>
-        </span>
-        <svg
-          viewBox={`0 0 ${N} ${H}`}
-          preserveAspectRatio="none"
-          height={H}
-          onPointerDown={(e) => {
-            (e.currentTarget as Element).setPointerCapture(e.pointerId);
-            pick(e);
-          }}
-          onPointerMove={(e) => {
-            if (e.buttons & 1) pick(e);
-          }}
-        >
-          <path d={plot.one} stroke="#444" stroke-width="1" vector-effect="non-scaling-stroke" />
-          <path
-            d={plot.corners}
-            stroke={CORNER_COLOR}
-            stroke-width="2"
-            vector-effect="non-scaling-stroke"
-          />
-          <path
-            d={plot.ratio}
-            fill="none"
-            stroke="#8ab4f8"
-            stroke-width="1.5"
-            vector-effect="non-scaling-stroke"
-          />
-          {row !== null && (
-            <path
-              d={`M${i + 0.5} 0V${H}`}
-              stroke="#fff"
-              stroke-width="1"
-              vector-effect="non-scaling-stroke"
-            />
-          )}
-        </svg>
-      </div>
-      <div class="strip-plot">
-        <span class="strip-axis">
-          <span>180°</span>
-          <span>turn</span>
-          <span>0°</span>
-        </span>
-        <svg
-          viewBox={`0 0 ${N} ${TH}`}
-          preserveAspectRatio="none"
-          height={TH}
-          onPointerDown={(e) => {
-            (e.currentTarget as Element).setPointerCapture(e.pointerId);
-            pick(e);
-          }}
-          onPointerMove={(e) => {
-            if (e.buttons & 1) pick(e);
-          }}
-        >
-          <path
-            d={`M0 ${TH - (s.cornerTurn / 180) * TH}H${N}`}
-            stroke="#e0a050"
-            stroke-width="1"
-            stroke-dasharray="3 2"
-            vector-effect="non-scaling-stroke"
-          />
-          <path
-            d={plot.turn}
-            fill="none"
-            stroke="#8ab4f8"
-            stroke-width="1.5"
-            vector-effect="non-scaling-stroke"
-          />
-          {row !== null && (
-            <path
-              d={`M${i + 0.5} 0V${TH}`}
-              stroke="#fff"
-              stroke-width="1"
-              vector-effect="non-scaling-stroke"
-            />
-          )}
-        </svg>
-      </div>
-      <div class="strip-key">
-        <span style={{ color: "#8ab4f8" }}>out/in, turn</span>
-        <span style={{ color: "#e0a050" }}>min turn</span>
-        <span style={{ color: "#666" }}>×1</span>
-        <span style={{ color: CORNER_COLOR }}>corner</span>
-      </div>
-    </div>
-  );
-}
-
 export function CenterlinePage() {
   const [s, setS] = useState<Settings>(() => load(SETTINGS_KEY, DEFAULTS));
   const set = (patch: Partial<Settings>) => setS((prev) => ({ ...prev, ...patch }));
@@ -755,7 +579,6 @@ export function CenterlinePage() {
   // How the stroke on the bench was drawn, when it was drawn here.
   const [meta, setMeta] = useState<Meta>(saved.meta);
   const [saveStatus, setSaveStatus] = useState("");
-  const [probe, setProbe] = useState<number | null>(null);
   // The replay: whether it is playing, and the stroke time the pens are at,
   // set by playing or by the time slider.
   const [playing, setPlaying] = useState(false);
@@ -810,12 +633,10 @@ export function CenterlinePage() {
     const o = pipelineOptions(s, drawnZoom);
     const t = tOpen(pts, open);
     const [curves, tCenterline] = timed(() => new Centerline(pts, o).curves(t), repeat);
-    const trace: CornerTrace[] = [];
-    const { radius } = centerlineStages(pts, o, t, trace);
+    const { radius } = centerlineStages(pts, o, t);
     return {
       raw: radius.map((p) => ({ x: p.x, y: p.y, t: p.tStart })),
       radius,
-      trace: s.cornerDebug ? trace : null,
       input: radius,
       cubics: nodeCubics(curves),
       times: curves.map((n) => n.tStart),
@@ -978,20 +799,6 @@ export function CenterlinePage() {
     return { offsets, worst: w === undefined ? "" : `M${w[0].x} ${w[0].y}L${w[1].x} ${w[1].y}` };
   }, [s.showReplay, replay]);
 
-  const probeLayer = useMemo(() => {
-    const row = frame.trace?.find((r) => r.at === probe);
-    if (row === undefined) return null;
-    const pts = frame.radius;
-    const a = pts[row.prev];
-    const p = pts[row.at];
-    const b = pts[row.next];
-    return {
-      in: `M${a.x} ${a.y}L${p.x} ${p.y}`,
-      out: `M${p.x} ${p.y}L${b.x} ${b.y}`,
-      at: circlesPath([p], () => 9 * k),
-    };
-  }, [frame, probe, k]);
-
   // --- input ---
 
   function pick(next: Point3[][], i: number) {
@@ -1116,19 +923,6 @@ export function CenterlinePage() {
       return;
     }
     if (e.button !== 0) return;
-    if (e.shiftKey && frame.trace !== null) {
-      const c = toContent(e);
-      let best = Infinity;
-      for (const r of frame.trace) {
-        const q = frame.radius[r.at];
-        const d = (q.x - c.x) ** 2 + (q.y - c.y) ** 2;
-        if (d < best) {
-          best = d;
-          setProbe(r.at);
-        }
-      }
-      return;
-    }
     svgRef.current!.setPointerCapture(e.pointerId);
     t0.current = e.timeStamp;
     setMeta({ pointerType: e.pointerType, zoom: view.zoom, coalesced: s.coalesced });
@@ -1196,16 +990,12 @@ export function CenterlinePage() {
       if (document.activeElement instanceof HTMLInputElement) return;
       if (e.key === "ArrowLeft") setFed((n) => Math.max(0, n - 1));
       else if (e.key === "ArrowRight") setFed((n) => Math.min(stroke.length, n + 1));
-      else if ((e.key === "[" || e.key === "]") && frame.trace !== null) {
-        const i = frame.trace.findIndex((r) => r.at === probe);
-        const row = i === -1 ? frame.trace[0] : frame.trace[i + (e.key === "[" ? -1 : 1)];
-        if (row !== undefined) setProbe(row.at);
-      } else return;
+      else return;
       e.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [stroke.length, frame.trace, probe]);
+  }, [stroke.length]);
 
   const { cubics, input } = frame;
 
@@ -1375,16 +1165,6 @@ export function CenterlinePage() {
               value={s.cornerTurn}
               onInput={(cornerTurn) => set({ cornerTurn })}
             />
-            <Check
-              label="inspect"
-              value={s.cornerDebug}
-              onInput={(cornerDebug) => set({ cornerDebug })}
-            />
-            {s.cornerDebug && (
-              <p class="note">
-                shift-click the canvas or drag in the strip to probe a vertex; [ ] step it
-              </p>
-            )}
           </Section>
 
           <Section title="smoothing">
@@ -1679,32 +1459,6 @@ export function CenterlinePage() {
                     vector-effect="non-scaling-stroke"
                   />
                 )}
-                {probeLayer !== null && (
-                  <>
-                    <path
-                      d={probeLayer.in}
-                      fill="none"
-                      stroke={PROBE_COLOR}
-                      stroke-width="1.5"
-                      stroke-dasharray="4 3"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <path
-                      d={probeLayer.out}
-                      fill="none"
-                      stroke={PROBE_COLOR}
-                      stroke-width="3"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <path
-                      d={probeLayer.at}
-                      fill="none"
-                      stroke={PROBE_COLOR}
-                      stroke-width="2"
-                      vector-effect="non-scaling-stroke"
-                    />
-                  </>
-                )}
                 {replayLayer !== null && (
                   <>
                     <path
@@ -1776,12 +1530,6 @@ export function CenterlinePage() {
                 <i style={{ background: CORNER_COLOR }} />
                 corner
               </span>
-              {probeLayer !== null && (
-                <span>
-                  <i style={{ background: PROBE_COLOR }} />
-                  probe: in dashed, out solid
-                </span>
-              )}
               {(replayLayer !== null || playLayer !== null) && (
                 <span>
                   <i style={{ background: REPLAY_COLOR }} />
@@ -1790,9 +1538,6 @@ export function CenterlinePage() {
               )}
             </div>
           </div>
-          {frame.trace !== null && (
-            <CornerStrip trace={frame.trace} s={s} probe={probe} onProbe={setProbe} />
-          )}
         </div>
       </div>
 
