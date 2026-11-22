@@ -41,7 +41,6 @@ const DEFAULTS = {
   widthLag: CENTERLINE_DEFAULTS.widthLag,
 
   cornerArm: CENTERLINE_DEFAULTS.cornerArm,
-  cornerTurn: 30, // deg here, rad to the library
 
   smoothWindow: CENTERLINE_DEFAULTS.smoothWindow,
 
@@ -67,8 +66,7 @@ const DEFAULTS = {
 };
 type Settings = typeof DEFAULTS;
 
-// Versioned: lengths moved from multiples of the pen to screen px, and a value
-// saved under the old meaning reads as a different one.
+// bump when a setting's meaning changes
 const SETTINGS_KEY = "rescrawl-centerline-settings-3";
 const STROKES_KEY = "rescrawl-centerline-strokes";
 
@@ -97,14 +95,11 @@ const pipelineOptions = (s: Settings, zoom: number): CenterlineOptions => ({
   ...s,
   zoom,
   minWidth: s.radius === "fixed" ? s.maxWidth : s.minWidth,
-  cornerTurn: s.cornerTurn * DEG,
 });
 
 // open: the pen is still down on the last point
 const tOpen = (pts: Point3[], open: boolean) =>
   open && pts.length > 0 ? pts[pts.length - 1].t : undefined;
-
-const DEG = Math.PI / 180;
 
 // A node list as Bezier cubics.
 function nodeCubics(ns: CubicNode[]): Cubic[] {
@@ -1155,15 +1150,6 @@ export function CenterlinePage() {
               step={0.5}
               value={s.cornerArm}
               onInput={(cornerArm) => set({ cornerArm })}
-            />
-            <Knob
-              label="min turn°"
-              title="angle between in chord and out chord at or above this, and the most of any sample within arm"
-              min={0}
-              max={180}
-              step={1}
-              value={s.cornerTurn}
-              onInput={(cornerTurn) => set({ cornerTurn })}
             />
           </Section>
 

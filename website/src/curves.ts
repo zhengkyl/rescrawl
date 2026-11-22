@@ -265,12 +265,7 @@ export const STRATEGY_DEFS: StrategyDef[] = [
 // rescrawl options (exposed as knobs in the panel).
 export const INK_COLOR = "#1a1a1a";
 
-// Every length moved to screen px at once (some had been a multiple of the
-// pen), `engine` had split into `fit` and `outline`, and `cornerTurn` went
-// from degrees to radians. A blob saved
-// under an older meaning would be wrong, and for several knobs an old value is
-// indistinguishable from a new one, so the key is versioned and stale panel
-// settings are dropped. Strokes are stored separately and are unaffected.
+// bump when a knob's meaning changes: stale panel settings are dropped, strokes are kept
 export const INK_STORAGE_KEY = "rescrawl-ink-6";
 
 export type InkOptions = Required<CenterlineOptions> & Required<OutlineOptions>;
@@ -370,13 +365,6 @@ export const INK_SECTIONS: InkSection[] = [
         min: 0,
         max: 32,
         step: 0.5,
-      },
-      {
-        key: "cornerTurn",
-        label: "corner turn (rad)",
-        min: 0,
-        max: 3.14,
-        step: 0.01,
       },
     ],
   },

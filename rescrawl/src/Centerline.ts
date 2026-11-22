@@ -106,7 +106,6 @@ export const CENTERLINE_DEFAULTS: Required<CenterlineOptions> = {
   thinSpeed: 1,
   widthLag: 80,
   cornerArm: 4,
-  cornerTurn: Math.PI / 2,
   handTol: 0.8,
   reparam: 2,
   settleTime: 150,
