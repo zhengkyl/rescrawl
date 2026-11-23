@@ -6,47 +6,60 @@ export type CubicNode = {
   y: number;
   tStart: number;
   tEnd: number;
-  r: number;
   corner: boolean;
 
   c1x: number;
   c1y: number;
   c2x: number;
   c2y: number;
-
-  // width: number;
-  // inputIndex: number;
 };
 
-export type HandOptions = {
-  handTol?: number; // px a sample may lie off the segment
-  reparam?: number; // rounds of moving each sample's u to the nearest point, then solving again
+export type FitOptions = {
+  tolerance?: number;
+  refitRounds?: number; // rounds of resolving sample's u
   settleTime?: number; // most ms of drawing one segment may span
 };
 
-type ResumableFit = { body: CubicNode[]; tail: CubicNode[]; resume: number };
+export type CenterlineFit = {
+  samples: Sample[];
+  nodes: CubicNode[];
+  settled: number;
+};
+
+const SPARSE = 20; // multiple of tolerance
+
+// In o.tolerance. A tangent leans on the samples before it, not the one after,
+// in proportion to the span it ends, wholly from LEAN.
+const LEAN = 50;
 
 // all 0 movement points must be filtered out before
 //
-// fits from samples[start], nodes decided by samples[0..stable) go in body
-// stable === samples.length means the stroke is done, so all nodes are body
-export function fitHand(
+// keeps prev's settled nodes and fits on from where the first unsettled one
+// starts; nodes decided by samples[0..stableIndex] settle
+// stableIndex === samples.length - 1 means the stroke is done, so all nodes settle
+//
+// writes `at` on every sample, those before the resume point as prev placed them
+export function fitCubics(
   samples: Sample[],
-  arcLengths: Float64Array,
-  o: { handTol: number; reparam: number; settleTime: number },
-  start = 0,
-  stable = 0,
-): ResumableFit {
-  const body: CubicNode[] = [];
+  o: { tolerance: number; refitRounds: number; settleTime: number },
+  stableIndex: number,
+  prev: CenterlineFit,
+): CenterlineFit {
+  // the first unsettled node starts at the first sample placed at it
+  let resume = 0;
+  while (resume < prev.samples.length && prev.samples[resume].at !== prev.settled) resume++;
+  for (let i = 0; i < resume; i++) samples[i].at = prev.samples[i].at;
+
+  const body = prev.nodes.slice(0, prev.settled);
   const tail: CubicNode[] = [];
-  let resume = start;
 
   const n = samples.length;
-  const done = stable === n;
+  const done = stableIndex === n - 1;
   if (n === 1) {
     const first = samples[0];
-    (done ? body : tail).push({ ...first, c1x: first.x, c1y: first.y, c2x: first.x, c2y: first.y });
-    return { body, tail, resume };
+    first.at = body.length;
+    (done ? body : tail).push(node(first, first.x, first.y, first.x, first.y));
+    return { samples, nodes: [...body, ...tail], settled: body.length };
   }
 
   const x = [0];
@@ -78,11 +91,11 @@ export function fitHand(
 
     const ax = x[curr] - x[prev];
     const ay = y[curr] - y[prev];
-    const aMagn = arcLengths[curr] - arcLengths[prev];
+    const aMagn = samples[curr].s - samples[prev].s;
 
     const bx = x[next] - x[curr];
     const by = y[next] - y[curr];
-    const bMagn = arcLengths[next] - arcLengths[curr];
+    const bMagn = samples[next].s - samples[curr].s;
 
     if (i === 0) {
       tin.push({ x: bx / bMagn, y: by / bMagn });
@@ -114,19 +127,76 @@ export function fitHand(
     tout.push(tin[i]);
   }
 
-  // hold back the tip while it can still move
-  const end = done ? n - 1 : n - 2;
+  // back[i]: the tangent at i of the circle through i and the two samples
+  // before it, which is known as soon as i is
+  const back: ({ x: number; y: number } | undefined)[] = [];
+  for (let i = 0; i < n; i++) {
+    back.push(undefined);
+    if (i < 2 || samples[i - 1].corner) continue;
+    const c = tin[i - 1];
+    const bx = x[i] - x[i - 1];
+    const by = y[i] - y[i - 1];
+    const L = Math.sqrt(bx * bx + by * by);
+    const along = (c.x * bx + c.y * by) / L;
+    if (along > 0) back[i] = { x: (2 * along * bx) / L - c.x, y: (2 * along * by) / L - c.y };
+  }
+  for (let i = n - 2; i >= 1; i--) {
+    const b = back[i];
+    if (b === undefined || samples[i].corner) continue;
+    const c = tin[i];
+    if (b.x * c.x + b.y * c.y <= 0) continue;
+    const L = Math.hypot(x[i] - x[i - 1], y[i] - y[i - 1]);
+    const w = Math.min(1, L / (LEAN * o.tolerance));
+    const tx = (1 - w) * c.x + w * b.x;
+    const ty = (1 - w) * c.y + w * b.y;
+    const tMagn = Math.sqrt(tx * tx + ty * ty);
+    tin[i] = { x: tx / tMagn, y: ty / tMagn };
+    tout[i] = tin[i];
+  }
+  if (!done) {
+    // the tip's tangent, were the pen to keep the turn it has
+    const guess = back[n - 1];
+    if (guess !== undefined) tin[n - 1] = guess;
+  }
 
-  let a = start;
-  while (a < end) {
+  // What the fit is held to: the samples, and where two are sparse, points
+  // along the arc drawn between them. `di[i]` is where sample i sits among them.
+  const X: number[] = [];
+  const Y: number[] = [];
+  const di: number[] = [];
+  for (let i = 0; i < n; i++) {
+    di.push(X.length);
+    X.push(x[i]);
+    Y.push(y[i]);
+    if (i === n - 1) continue;
+    const chord = Math.hypot(x[i + 1] - x[i], y[i + 1] - y[i]);
+    const between = Math.ceil(chord / (SPARSE * o.tolerance)) - 1;
+    if (between < 1) continue;
+    const m = chordRule(chord, tout[i].x, tout[i].y, tin[i + 1].x, tin[i + 1].y);
+    for (let j = 1; j <= between; j++) {
+      const u = j / (between + 1);
+      const u2 = u * u;
+      const u3 = u2 * u;
+      const h00 = 2 * u3 - 3 * u2 + 1;
+      const h10 = u3 - 2 * u2 + u;
+      const h01 = -2 * u3 + 3 * u2;
+      const h11 = u3 - u2;
+      X.push(h00 * x[i] + h10 * m * tout[i].x + h01 * x[i + 1] + h11 * m * tin[i + 1].x);
+      Y.push(h00 * y[i] + h10 * m * tout[i].y + h01 * y[i + 1] + h11 * m * tin[i + 1].y);
+    }
+  }
+
+  let a = resume;
+  while (a < n - 1) {
     let mo = 0;
     let mi = 0;
+    let fitUs: number[] = [];
+    const da = di[a];
 
     let b = a + 1;
-
-    while (b <= end && (b - 1 === a || !samples[b - 1].corner)) {
-      if (b - 1 !== a && samples[b].tStart - samples[a].tEnd > o.settleTime) break;
-      const arc = arcLengths[b] - arcLengths[a];
+    while (b < n && (b - 1 === a || !samples[b - 1].corner)) {
+      if (b - 1 !== a && samples[b].t - samples[a].tOut > o.settleTime) break;
+      const db = di[b];
 
       const dx = x[b] - x[a];
       const dy = y[b] - y[a];
@@ -139,6 +209,7 @@ export function fitHand(
       if (twoPoints) {
         mo = mc;
         mi = mc;
+        fitUs = [];
         b++;
         continue;
       }
@@ -152,20 +223,24 @@ export function fitHand(
       let tbY!: number;
 
       const us: number[] = [];
-      for (let j = a + 1; j < b; j++) {
-        us.push((arcLengths[j] - arcLengths[a]) / arc);
+      let arc = 0;
+      for (let j = da + 1; j <= db; j++) {
+        arc += Math.hypot(X[j] - X[j - 1], Y[j] - Y[j - 1]);
+        us.push(arc);
       }
+      us.pop();
+      for (let j = 0; j < us.length; j++) us[j] /= arc;
 
       let fits = true;
-      const newtonIterations = o.reparam;
+      const newtonIterations = o.refitRounds;
       for (let i = 0; i <= newtonIterations; i++) {
         let A = 0;
         let B = 0;
         let C = 0;
         let E = 0;
         let F = 0;
-        for (let j = a + 1; j < b; j++) {
-          const u = us[j - a - 1];
+        for (let j = da + 1; j < db; j++) {
+          const u = us[j - da - 1];
 
           const u2 = u * u;
           const u3 = u2 * u;
@@ -174,8 +249,8 @@ export function fitHand(
           const h01 = -2 * u3 + 3 * u2;
           const h11 = u3 - u2;
 
-          const rjX = x[j] - h00 * x[a] - h01 * x[b];
-          const rjY = y[j] - h00 * y[a] - h01 * y[b];
+          const rjX = X[j] - h00 * x[a] - h01 * x[b];
+          const rjY = Y[j] - h00 * y[a] - h01 * y[b];
           A += h10 * h10;
           B += h10 * h11 * (tout[a].x * tin[b].x + tout[a].y * tin[b].y);
           C += h11 * h11;
@@ -226,8 +301,8 @@ export function fitHand(
         tbY = tin[b].y * mb;
 
         fits = true;
-        for (let j = a + 1; j < b; j++) {
-          const u = us[j - a - 1];
+        for (let j = da + 1; j < db; j++) {
+          const u = us[j - da - 1];
 
           const u2 = u * u;
           const u3 = u2 * u;
@@ -239,8 +314,8 @@ export function fitHand(
           const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
           const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
 
-          const gapx = pux - x[j];
-          const gapy = puy - y[j];
+          const gapx = pux - X[j];
+          const gapy = puy - Y[j];
 
           const hp00 = 6 * u2 - 6 * u;
           const hp10 = 3 * u2 - 4 * u + 1;
@@ -263,11 +338,11 @@ export function fitHand(
 
           // fp is second derivative, > 0 means upward parabola aka min, otherwise no good
           if (fp > 0) {
-            us[j - a - 1] = Math.max(0, Math.min(u - f / fp, 1));
+            us[j - da - 1] = Math.max(0, Math.min(u - f / fp, 1));
           }
 
           {
-            const u = us[j - a - 1];
+            const u = us[j - da - 1];
             const u2 = u * u;
             const u3 = u2 * u;
             const h00 = 2 * u3 - 3 * u2 + 1;
@@ -278,10 +353,10 @@ export function fitHand(
             const pux = h00 * x[a] + h10 * taX + h01 * x[b] + h11 * tbX;
             const puy = h00 * y[a] + h10 * taY + h01 * y[b] + h11 * tbY;
 
-            const gapx = pux - x[j];
-            const gapy = puy - y[j];
+            const gapx = pux - X[j];
+            const gapy = puy - Y[j];
 
-            if (gapx * gapx + gapy * gapy > o.handTol * o.handTol) {
+            if (gapx * gapx + gapy * gapy > o.tolerance * o.tolerance) {
               fits = false;
             }
           }
@@ -295,62 +370,46 @@ export function fitHand(
       if (!fits) break;
       mo = ma;
       mi = mb;
+      fitUs = us;
       b++;
     }
-
-    // tin[b] reads samples[b + 1]
-    const settles = done || b + 1 < stable;
+    // two samples in one place: nothing fits, and the span is taken as it is
+    if (b === a + 1) b++;
     b--;
 
-    const node = {
-      ...samples[a],
-      c1x: samples[a].x + (mo / 3) * tout[a].x,
-      c1y: samples[a].y + (mo / 3) * tout[a].y,
-      c2x: samples[b].x - (mi / 3) * tin[b].x,
-      c2y: samples[b].y - (mi / 3) * tin[b].y,
-    };
-    if (settles) {
-      body.push(node);
-      resume = b;
-    } else {
-      tail.push(node);
-    }
+    // tin[b] reads samples[b + 1]
+    const settles = done || b < stableIndex;
 
+    const k = body.length + tail.length;
+    samples[a].at = k;
+    // a sample whose u did not land past the one before shares its place
+    let lastU = 0;
+    for (let j = a + 1; j < b; j++) {
+      const u = fitUs[di[j] - da - 1];
+      if (u > lastU && u < 1) lastU = u;
+      samples[j].at = k + lastU;
+    }
+    (settles ? body : tail).push(
+      node(
+        samples[a],
+        samples[a].x + (mo / 3) * tout[a].x,
+        samples[a].y + (mo / 3) * tout[a].y,
+        samples[b].x - (mi / 3) * tin[b].x,
+        samples[b].y - (mi / 3) * tin[b].y,
+      ),
+    );
     a = b;
   }
 
-  if (!done) {
-    const tip = n - 1;
-    const dx = x[tip] - x[end];
-    const dy = y[tip] - y[end];
-    const m = chordRule(
-      Math.sqrt(dx * dx + dy * dy),
-      tout[end].x,
-      tout[end].y,
-      tin[tip].x,
-      tin[tip].y,
-    );
-    tail.push({
-      ...samples[end],
-      c1x: samples[end].x + (m / 3) * tout[end].x,
-      c1y: samples[end].y + (m / 3) * tout[end].y,
-      c2x: samples[tip].x - (m / 3) * tin[tip].x,
-      c2y: samples[tip].y - (m / 3) * tin[tip].y,
-    });
-  }
-
   const last = samples[n - 1];
-  const lastNode = {
-    ...last,
-    c1x: last.x,
-    c1y: last.y,
-    c2x: last.x,
-    c2y: last.y,
-  };
+  last.at = body.length + tail.length;
+  (done ? body : tail).push(node(last, last.x, last.y, last.x, last.y));
 
-  (done ? body : tail).push(lastNode);
+  return { samples, nodes: [...body, ...tail], settled: body.length };
+}
 
-  return { body, tail, resume };
+function node(s: Sample, c1x: number, c1y: number, c2x: number, c2y: number): CubicNode {
+  return { x: s.x, y: s.y, tStart: s.t, tEnd: s.tOut, corner: s.corner, c1x, c1y, c2x, c2y };
 }
 
 function speedRatio(dx: number, dy: number, t0x: number, t0y: number, t1x: number, t1y: number) {
