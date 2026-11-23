@@ -1,7 +1,7 @@
 import type { ReadonlySignal, Signal } from "@preact/signals";
 import { computed, useSignal } from "@preact/signals";
 import { useEffect, useMemo, useRef } from "preact/hooks";
-import { type CubicNode, holdEndUntil } from "rescrawl";
+import type { CubicNode } from "rescrawl";
 import { useApp } from "../context";
 import type { ActiveStrategy, DebugLayers, InkOptions, StagePick } from "../curves";
 import {
@@ -429,7 +429,9 @@ export function App() {
       drawLoopRef.current = null;
       return;
     }
-    livePoints.value = { ...rec, points: holdEndUntil(rec.points, clock.getElapsed()) };
+    const last = rec.points[rec.points.length - 1];
+    const held = { ...last, t: Math.max(clock.getElapsed(), last.t) };
+    livePoints.value = { ...rec, points: [...rec.points, held] };
     drawLoopRef.current = requestAnimationFrame(drawFrame);
   }
 
@@ -454,7 +456,8 @@ export function App() {
     }
     // The pen held until release, so the end dwell is recorded.
     const now = clock.getElapsedFromTs(e.timeStamp);
-    const stroke: Stroke = { ...rec, points: holdEndUntil(rec.points, now) };
+    const last = rec.points[rec.points.length - 1];
+    const stroke: Stroke = { ...rec, points: [...rec.points, { ...last, t: Math.max(now, last.t) }] };
     currentStrokeRef.current = null;
     livePoints.value = null;
     store.append(stroke);

@@ -2,7 +2,7 @@ import { clamp11, dist } from "../math.ts";
 import type { Sample } from "./smooth.ts";
 
 export type CornerOptions = {
-  cornerArm?: number;
+  lookahead?: number; // a corner's arms take half each
 };
 
 // corner threshold angle between in chord and out chord
@@ -10,7 +10,7 @@ const CORNER_TURN = Math.PI / 2;
 
 export function markCorners(samples: Sample[], o: Required<CornerOptions>) {
   const n = samples.length;
-  const arm = o.cornerArm;
+  const arm = o.lookahead / 2;
   const scores = new Float64Array(n);
 
   for (let i = 1; i < n - 1; i++) {
