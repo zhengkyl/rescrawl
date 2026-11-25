@@ -5,6 +5,7 @@
     "dev": "pnpm --filter website dev",
     "test": "node --test rescrawl/test/*.test.ts",
     "bench": "node rescrawl/test/bench.ts",
+    "jitter": "node rescrawl/test/jitter.ts",
     "fmt": "oxfmt"
   },
   "devDependencies": {
