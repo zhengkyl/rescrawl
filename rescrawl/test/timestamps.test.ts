@@ -1,19 +1,19 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { holdEndUntil, retimeBadTimesteps } from "../src/centerline/retime.ts";
+import { retimeDuplicateTimestamps } from "../src/centerline/retime.ts";
 import { type Sample, toSmoothSamples } from "../src/centerline/smooth.ts";
 import { dist, type Point3 } from "../src/math.ts";
 
-// No fold past exact repeats, so these read as the stamps alone.
-const O = { framePeriod: 16, minMove: 0 };
+// No fold past exact repeats, and every frame's end in reach, so these read as
+// the stamps alone.
+const O = { framePeriod: 16, minMove: 0, lookahead: Infinity };
 
-// x along a line, 10px a sample, at the given stamps
 const line = (ts: number[]): Point3[] => ts.map((t, i) => ({ x: i * 10, y: 0, t }));
-const xt = (pts: Sample[]) => pts.map((p) => [p.x, +p.tStart.toFixed(1), +p.tEnd.toFixed(1)]);
-const run = (pts: Point3[], o: { framePeriod: number; minMove: number } = O) => {
-  const { samples, arcLengths } = toSmoothSamples(pts, { smoothWindow: 0, minMove: o.minMove });
-  retimeBadTimesteps(samples, arcLengths, o);
+const xt = (pts: Sample[]) => pts.map((p) => [p.x, +p.t.toFixed(1), +p.tOut.toFixed(1)]);
+const run = (pts: Point3[], o: typeof O = O) => {
+  const { samples } = toSmoothSamples(pts, { smoothWindow: 0, minMove: o.minMove });
+  retimeDuplicateTimestamps(samples, o);
   return samples;
 };
 
@@ -22,7 +22,16 @@ describe("retime", () => {
     const pts = line([0, 16, 32, 48]);
     assert.deepEqual(
       run(pts),
-      pts.map((p) => ({ x: p.x, y: p.y, tStart: p.t, tEnd: p.t, r: 1, corner: false })),
+      pts.map((p) => ({
+        x: p.x,
+        y: p.y,
+        s: p.x,
+        t: p.t,
+        tOut: p.t,
+        corner: false,
+        p: 0,
+        at: 0,
+      })),
     );
   });
 
@@ -38,7 +47,7 @@ describe("retime", () => {
 
   test("raises an early stamp to the one before it, sharing its frame", () => {
     assert.deepEqual(
-      run(line([0, 16, 32, 24, 48])).map((p) => p.tStart),
+      run(line([0, 16, 32, 24, 48])).map((p) => p.t),
       [0, 16, 24, 32, 48],
     );
   });
@@ -93,16 +102,20 @@ describe("retime", () => {
     ]);
   });
 
-  test("holdEndUntil: the pen held at its last position, never before it got there", () => {
-    const pts = line([0, 16, 32]);
-    assert.deepEqual(xt(run(holdEndUntil(pts, 200))), [
+  test("a frame longer than the lookahead: each lookahead takes 1 - 1/e of the time left", () => {
+    const o = { ...O, lookahead: 10 };
+    assert.deepEqual(xt(run(line([0, 16, 16, 16, 16, 16]), o)), [
       [0, 0, 0],
-      [10, 16, 16],
-      [20, 32, 200],
+      [10, 10.1, 10.1],
+      [20, 13.8, 13.8],
+      [30, 15.2, 15.2],
+      // the end in reach: what's left goes evenly
+      [40, 15.6, 15.6],
+      [50, 16, 16],
     ]);
-    // a clock behind the last stamp would otherwise pull the samples back
-    assert.deepEqual(run(holdEndUntil(pts, 20)), run(pts));
-    assert.deepEqual(holdEndUntil([], 5), []);
+    // the same frame with its end out of reach takes no time from what's past it
+    const longer = run(line([0, 16, 16, 16, 16, 16, 16, 16, 16]), o);
+    assert.deepEqual(xt(longer).slice(0, 4), xt(run(line([0, 16, 16, 16, 16, 16]), o)).slice(0, 4));
   });
 
   test("a sample within minMove of the last kept is folded in: first kept", () => {
@@ -126,15 +139,15 @@ describe("retime", () => {
   // of a stamp that ran backwards (stylus cursive's pointerdown, 0 -> -30).
   test("recorded samples", () => {
     const dir = new URL("./samples/", import.meta.url);
-    const o = { framePeriod: 1000 / 60, minMove: 1.5 };
+    const o = { framePeriod: 1000 / 60, minMove: 1.5, lookahead: 8 };
     for (const file of readdirSync(dir)) {
       const raw: Point3[] = JSON.parse(readFileSync(new URL(file, dir), "utf8")).raw;
       const out = run(raw, o);
       for (let i = 0; i < out.length; i++) {
-        assert.ok(out[i].tEnd >= out[i].tStart, `${file}: left before arriving at ${i}`);
+        assert.ok(out[i].tOut >= out[i].t, `${file}: left before arriving at ${i}`);
         if (i === 0) continue;
         assert.ok(dist(out[i], out[i - 1]) > o.minMove, `${file}: within minMove at ${i}`);
-        assert.ok(out[i].tStart > out[i - 1].tEnd, `${file}: no time to move into ${i}`);
+        assert.ok(out[i].t > out[i - 1].tOut, `${file}: no time to move into ${i}`);
       }
       // Kept samples are recorded ones, in order; every recorded sample is
       // kept or within minMove of the last kept before it.
@@ -143,10 +156,7 @@ describe("retime", () => {
         const p = raw[i];
         if (j + 1 < out.length && out[j + 1].x === p.x && out[j + 1].y === p.y) {
           j++;
-          assert.ok(
-            Math.abs(out[j].tStart - p.t) <= 2000 / 60,
-            `${file}: moved ${out[j].tStart - p.t}`,
-          );
+          assert.ok(Math.abs(out[j].t - p.t) <= 2000 / 60, `${file}: moved ${out[j].t - p.t}`);
         } else {
           assert.ok(j >= 0 && dist(out[j], p) <= o.minMove, `${file}: ${i} lost`);
         }

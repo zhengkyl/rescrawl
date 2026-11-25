@@ -32,6 +32,9 @@ const SPARSE = 20; // multiple of tolerance
 // in proportion to the span it ends, wholly from LEAN.
 const LEAN = 50;
 
+// ratio between slowest and fastest speed
+const ALPHA = 0.6;
+
 // all 0 movement points must be filtered out before
 //
 // keeps prev's settled nodes and fits on from where the first unsettled one
@@ -145,7 +148,7 @@ export function fitCubics(
     if (b === undefined || samples[i].corner) continue;
     const c = tin[i];
     if (b.x * c.x + b.y * c.y <= 0) continue;
-    const L = Math.hypot(x[i] - x[i - 1], y[i] - y[i - 1]);
+    const L = samples[i].s - samples[i - 1].s;
     const w = Math.min(1, L / (LEAN * o.tolerance));
     const tx = (1 - w) * c.x + w * b.x;
     const ty = (1 - w) * c.y + w * b.y;
@@ -169,7 +172,7 @@ export function fitCubics(
     X.push(x[i]);
     Y.push(y[i]);
     if (i === n - 1) continue;
-    const chord = Math.hypot(x[i + 1] - x[i], y[i + 1] - y[i]);
+    const chord = samples[i + 1].s - samples[i].s;
     const between = Math.ceil(chord / (SPARSE * o.tolerance)) - 1;
     if (between < 1) continue;
     const m = chordRule(chord, tout[i].x, tout[i].y, tin[i + 1].x, tin[i + 1].y);
@@ -184,6 +187,12 @@ export function fitCubics(
       X.push(h00 * x[i] + h10 * m * tout[i].x + h01 * x[i + 1] + h11 * m * tin[i + 1].x);
       Y.push(h00 * y[i] + h10 * m * tout[i].y + h01 * y[i + 1] + h11 * m * tin[i + 1].y);
     }
+  }
+  const D = [0];
+  for (let j = 1; j < X.length; j++) {
+    const dx = X[j] - X[j - 1];
+    const dy = Y[j] - Y[j - 1];
+    D.push(D[j - 1] + Math.sqrt(dx * dx + dy * dy));
   }
 
   let a = resume;
@@ -223,13 +232,14 @@ export function fitCubics(
       let tbY!: number;
 
       const us: number[] = [];
-      let arc = 0;
-      for (let j = da + 1; j <= db; j++) {
-        arc += Math.hypot(X[j] - X[j - 1], Y[j] - Y[j - 1]);
-        us.push(arc);
-      }
-      us.pop();
-      for (let j = 0; j < us.length; j++) us[j] /= arc;
+      const arc = D[db] - D[da];
+      for (let j = da + 1; j < db; j++) us.push((D[j] - D[da]) / arc);
+
+      const stalls = (m1: number, m2: number) =>
+        m1 <= 0 ||
+        m2 <= 0 ||
+        speedRatio(dx, dy, tout[a].x * m1, tout[a].y * m1, tin[b].x * m2, tin[b].y * m2) <
+          ALPHA * ALPHA;
 
       let fits = true;
       const newtonIterations = o.refitRounds;
@@ -260,15 +270,6 @@ export function fitCubics(
         const det = A * C - B * B;
         ma = (E * C - B * F) / det;
         mb = (A * F - B * E) / det;
-
-        // ratio between slowest and fastest speed
-        const alpha = 0.6;
-
-        const stalls = (m1: number, m2: number) =>
-          m1 <= 0 ||
-          m2 <= 0 ||
-          speedRatio(dx, dy, tout[a].x * m1, tout[a].y * m1, tin[b].x * m2, tin[b].y * m2) <
-            alpha * alpha;
 
         if (det === 0 || stalls(ma, mb)) {
           // when does this stall?

@@ -1,18 +1,30 @@
-import { Centerline } from "../src/Centerline.ts";
+import { Centerline } from "../src/centerline/Centerline.ts";
+import { setSpeedPressure } from "../src/brush/pressure.ts";
 import type { Point3 } from "../src/math.ts";
-import { Outline } from "../src/Outline.ts";
+import { outlinePieces } from "../src/brush/outline.ts";
+import { pressureRadii } from "../src/brush/radius.ts";
 import { discCoverage } from "./geometry.ts";
 import { RECORDED_STROKES, STROKES } from "./strokes.ts";
-
-// Numbers to watch, not assertions. Coverage is the fraction of the worst
-// node's rim the outline actually contains -- 1 would mean every disc is
-// wrapped, and nothing reaches that yet, so the point is the trend.
 
 const REPEATS = 30;
 
 function renderStroke(pts: Point3[]) {
-  const curves = new Centerline(pts, {}).curves();
-  return { curves, outline: new Outline({}).pieces(curves) };
+  const line = new Centerline(pts, {});
+  const fit = line.end();
+  const { nodes: curves, samples } = fit;
+  setSpeedPressure(samples, {});
+  const radii = pressureRadii(samples, {});
+  const discs = samples
+    .map((s, i) => ({ x: s.x, y: s.y, r: radii[i], at: s.at }))
+    .filter((d, i) => Number.isInteger(d.at) && (i === 0 || d.at > samples[i - 1].at));
+  return {
+    curves,
+    discs,
+    outline: outlinePieces(
+      fit,
+      discs.map((d) => d.r),
+    ).pieces,
+  };
 }
 
 function ms(run: () => void): number {
@@ -27,8 +39,6 @@ function ms(run: () => void): number {
   return times[times.length >> 1];
 }
 
-// Drawing re-renders the whole prefix every frame, so the live cost is what a
-// stroke actually costs, not one render of the finished thing.
 function frames(pts: Point3[]): Point3[][] {
   const step = Math.max(1, Math.floor(pts.length / 60));
   const out: Point3[][] = [];
@@ -45,7 +55,7 @@ function measure(name: string, group: Point3[][]) {
     const r = renderStroke(pts);
     nodes += r.curves.length;
     contacts += r.outline.flat().length;
-    const c = discCoverage(r.curves, r.outline);
+    const c = discCoverage(r.discs, r.outline);
     if (c.worst < worst) {
       worst = c.worst;
       at = group.length > 1 ? `${s}:${c.node}` : `#${c.node}`;

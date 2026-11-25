@@ -1,5 +1,5 @@
 export type Point2 = { x: number; y: number };
-export type Point3 = { x: number; y: number; t: number };
+export type Point3 = { x: number; y: number; t: number; p?: number };
 
 export const TAU = Math.PI * 2;
 

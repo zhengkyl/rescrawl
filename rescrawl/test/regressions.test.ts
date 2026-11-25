@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
-import { Centerline } from "../src/Centerline.ts";
-import { Outline } from "../src/Outline.ts";
+import { Centerline } from "../src/centerline/Centerline.ts";
+import { setSpeedPressure } from "../src/brush/pressure.ts";
+import { OutlineBrush } from "../src/brush/OutlineBrush.ts";
+import { pressureRadii } from "../src/brush/radius.ts";
 
-// A saved stroke and the bench settings it was saved with, as the library takes
-// them: "average" smoothing is the window, "none" is 0.
 function sample(file: string) {
   const d = JSON.parse(readFileSync(new URL(`./samples/${file}`, import.meta.url), "utf8"));
   const s = d.settings;
@@ -25,8 +25,13 @@ describe("non-finite", () => {
   // samples the same position, and the hand fit divided by the zero step.
   const { raw, options } = sample("2026-11-01T23-25-01-non-finite.json");
   test("every node and contact finite", () => {
-    const curves = new Centerline(raw, options).curves();
-    const outline = new Outline(options).pieces(curves).flat();
+    const line = new Centerline(raw, options);
+    const fit = line.end();
+    const { nodes: curves, samples } = fit;
+    setSpeedPressure(samples, options);
+    const radii = pressureRadii(samples, options);
+    const outline = new OutlineBrush(options).pieces(fit).pieces.flat();
+    radii.forEach((r, i) => assert.ok(Number.isFinite(r), `radius ${i}: ${r}`));
     curves.forEach((n, i) => assert.ok(finite(n), `node ${i}: ${JSON.stringify(n)}`));
     outline.forEach((c, i) => assert.ok(finite(c), `contact ${i}: ${JSON.stringify(c)}`));
   });

@@ -1,18 +1,13 @@
 import { dist } from "../math.ts";
-import type { Sample } from "./smooth.ts";
+import { type InkOptions, withDefaults } from "../options.ts";
+import type { Sample } from "../centerline/smooth.ts";
 
 export type PressureOptions = {
   thinSpeed?: number; // screen px/ms at which pressure halves
-  zoom?: number;
 };
 
-export const PRESSURE_DEFAULTS: Required<PressureOptions> = {
-  thinSpeed: 0.5,
-  zoom: 1,
-};
-
-export function setSpeedPressure(samples: Sample[], options: PressureOptions) {
-  const o = { ...PRESSURE_DEFAULTS, ...options };
+export function setSpeedPressure(samples: Sample[], options: InkOptions = {}) {
+  const o = withDefaults(options);
   const thinSpeed = o.thinSpeed / o.zoom;
 
   const n = samples.length;

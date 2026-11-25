@@ -2,16 +2,16 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { isDeepStrictEqual } from "node:util";
-import { Centerline, stableSamples } from "../src/Centerline.ts";
-import { Outline } from "../src/Outline.ts";
+import { Centerline } from "../src/centerline/Centerline.ts";
 import { markCorners } from "../src/centerline/corner.ts";
-import { retimeBadTimesteps } from "../src/centerline/retime.ts";
-import { toSmoothSamples } from "../src/centerline/smooth.ts";
+import { setSpeedPressure } from "../src/brush/pressure.ts";
+import { retimeDuplicateTimestamps } from "../src/centerline/retime.ts";
+import { type Sample, toSmoothSamples } from "../src/centerline/smooth.ts";
+import { Ink } from "../src/Ink.ts";
+import { LineBrush } from "../src/brush/LineBrush.ts";
 import type { Point3 } from "../src/math.ts";
-import { varyThickness } from "../src/thickness/radius.ts";
+import { OutlineBrush } from "../src/brush/OutlineBrush.ts";
 
-// A saved stroke and the bench settings it was saved with, as the library takes
-// them: "average" smoothing is the window, "none" is 0.
 function sample(file: string) {
   const d = JSON.parse(readFileSync(new URL(`./samples/${file}`, import.meta.url), "utf8"));
   const s = d.settings;
@@ -23,7 +23,6 @@ function sample(file: string) {
   return { raw: d.raw.slice(0, d.fed) as Point3[], options };
 }
 
-// input arrives frame-coalesced: the points of one frame share a timestamp
 function frames(raw: Point3[]): Point3[][] {
   const out: Point3[][] = [];
   for (const p of raw) {
@@ -38,30 +37,58 @@ const files = readdirSync(new URL("./samples/", import.meta.url)).filter((f) =>
   f.endsWith(".json"),
 );
 
+// pressure at i reads samples[i + 1].t, so the last stable sample's isn't final
+function same(a: Sample, b: Sample, withPressure: boolean) {
+  return withPressure ? isDeepStrictEqual(a, b) : isDeepStrictEqual({ ...a, p: b.p }, b);
+}
+
 describe("stable samples don't change as the stroke goes on", () => {
   for (const file of files) {
     test(file, () => {
       const { raw, options } = sample(file);
-      // zoom-scaled, as the pipeline sees them
       const o = new Centerline([], options)["options"];
 
       const run = (points: Point3[]) => {
-        const { samples, arcLengths, placed } = toSmoothSamples(points, o);
-        const stable = stableSamples(samples, arcLengths, placed, o.cornerArm);
-        retimeBadTimesteps(samples, arcLengths, o);
-        markCorners(samples, arcLengths, o);
-        varyThickness(samples, arcLengths, o);
-        return { samples, stable };
+        const { samples, fixedIndex: fixed } = toSmoothSamples(points, o);
+        // nothing reads more than lookahead past a sample
+        let stableIndex = fixed;
+        while (stableIndex >= 0 && samples[fixed].s - samples[stableIndex].s <= o.lookahead) {
+          stableIndex--;
+        }
+        retimeDuplicateTimestamps(samples, o);
+        markCorners(samples, o);
+        setSpeedPressure(samples, options);
+        return { samples, stableIndex };
       };
 
-      const full = run(raw).samples;
+      const full = run(raw);
       let fed = 0;
       for (const frame of frames(raw)) {
         fed += frame.length;
-        const { samples, stable } = run(raw.slice(0, fed));
-        const i = samples.findIndex((s, i) => i < stable && !isDeepStrictEqual(s, full[i]));
-        assert.equal(i, -1, `sample ${i} of ${stable} stable changed after ${fed} points`);
+        const { samples, stableIndex } = run(raw.slice(0, fed));
+        const i = samples.findIndex(
+          (s, i) => i <= stableIndex && !same(s, full.samples[i], i < stableIndex),
+        );
+        assert.equal(i, -1, `sample ${i} of 0..${stableIndex} stable changed after ${fed} points`);
       }
+
+      // no timestamps: one frame that never ends still settles
+      const flat = raw.map((p) => ({ ...p, t: 0 }));
+      const whole = run(flat);
+      let settled = -1;
+      for (let fed = 1; fed <= flat.length; fed += 3) {
+        const { samples, stableIndex } = run(flat.slice(0, fed));
+        const i = samples.findIndex(
+          (s, i) => i <= stableIndex && !same(s, whole.samples[i], i < stableIndex),
+        );
+        assert.equal(
+          i,
+          -1,
+          `untimed sample ${i} of 0..${stableIndex} stable changed after ${fed} points`,
+        );
+        settled = stableIndex;
+      }
+      if (whole.samples.length > 10) assert.ok(settled >= 0, "untimed: nothing settled");
     });
   }
 });
@@ -75,16 +102,17 @@ describe("settled ink is what a single pass draws", () => {
       let settledWhileOpen = 0;
       for (const frame of frames(raw)) {
         for (const p of frame) live.update(p);
-        live.curves(frame[0].t);
-        settledWhileOpen = live.settledCount();
+        settledWhileOpen = live.fit(frame[0].t).settled;
       }
-      const drawn = live.curves();
+      const { nodes: drawn, samples } = live.end();
 
-      const once = new Centerline([...raw], options).curves();
+      const whole = new Centerline([...raw], options);
+      const { nodes: once, samples: onceSamples } = whole.end();
 
       assert.equal(drawn.length, once.length, "node count");
       const i = drawn.findIndex((n, i) => !isDeepStrictEqual(n, once[i]));
       assert.equal(i, -1, `node ${i} of ${once.length}, ${settledWhileOpen} settled while open`);
+      assert.deepEqual(samples, onceSamples, "samples");
       if (once.length > 10) assert.ok(settledWhileOpen > 0, "nothing settled while drawing");
     });
   }
@@ -96,28 +124,75 @@ describe("the resumed outline is what a single pass draws", () => {
       const { raw, options } = sample(file);
 
       const live = new Centerline([], options);
-      const outline = new Outline(options);
-      // every piece that was called settled while drawing, as it was then
+      const pen = new OutlineBrush(options);
+      const fit = (line: Centerline, tOpen?: number) => {
+        const out = tOpen === undefined ? line.end() : line.fit(tOpen);
+        setSpeedPressure(out.samples, options);
+        return out;
+      };
       const settled: unknown[] = [];
-      for (const frame of frames(raw)) {
+      const fs = frames(raw);
+      fs.forEach((frame, f) => {
         for (const p of frame) live.update(p);
-        const pieces = outline.pieces(live.curves(frame[0].t), live.settledCount());
-        for (let i = settled.length; i < outline.settledCount(); i++) {
-          settled.push(structuredClone(pieces[i]));
+        // at the frame, then held until just before the next, as an app's clock sees it
+        const times = f + 1 < fs.length ? [frame[0].t, fs[f + 1][0].t - 0.5] : [frame[0].t];
+        for (const t of times) {
+          const { pieces, settled: n } = pen.pieces(fit(live, t));
+          for (let i = settled.length; i < n; i++) settled.push(structuredClone(pieces[i]));
         }
-      }
-      const nodes = live.curves();
-      const drawn = outline.pieces(nodes, live.settledCount());
+      });
+      const { pieces: drawn, settled: settledAtEnd } = pen.pieces(fit(live));
 
-      const once = new Outline(options).pieces(new Centerline([...raw], options).curves());
+      const whole = new Centerline([...raw], options);
+      const once = new OutlineBrush(options).pieces(fit(whole)).pieces;
 
       assert.equal(drawn.length, once.length, "piece count");
       const i = drawn.findIndex((p, i) => !isDeepStrictEqual(p, once[i]));
       assert.equal(i, -1, `piece ${i} of ${once.length}`);
       const j = settled.findIndex((p, i) => !isDeepStrictEqual(p, once[i]));
       assert.equal(j, -1, `piece ${j} changed after it was settled`);
-      assert.equal(outline.settledCount(), once.length, "pieces left unsettled at the end");
+      assert.equal(settledAtEnd, once.length, "pieces left unsettled at the end");
       if (once.length > 3) assert.ok(settled.length > 0, "nothing settled while drawing");
     });
+  }
+});
+
+describe("ink fed a frame at a time draws what a single pass does", () => {
+  const brushes = {
+    "outline brush": () => new OutlineBrush(),
+    "line brush": () => new LineBrush(),
+  };
+  for (const [name, brush] of Object.entries(brushes)) {
+    for (const file of files) {
+      test(`${name}: ${file}`, () => {
+        const { raw, options } = sample(file);
+
+        const live = new Ink(brush(), options);
+        const settled: string[] = [];
+        const fs = frames(raw);
+        fs.forEach((frame, f) => {
+          for (const p of frame) live.update(p);
+          const times = f + 1 < fs.length ? [frame[0].t, fs[f + 1][0].t - 0.5] : [frame[0].t];
+          for (const t of times) {
+            const { paths, settled: n } = live.draw(t);
+            for (let i = 0; i < settled.length; i++) {
+              assert.equal(paths[i], settled[i], `path ${i} changed after it was settled`);
+            }
+            for (let i = settled.length; i < n; i++) settled.push(paths[i]);
+          }
+        });
+        const drawn = live.end();
+
+        const whole = new Ink(brush(), options);
+        for (const p of raw) whole.update(p);
+        const once = whole.end();
+
+        assert.equal(drawn.settled, drawn.paths.length, "paths left unsettled at the end");
+        // line brush stretches depend on when they settled
+        if (name === "outline brush") assert.deepEqual(drawn.paths, once.paths);
+        else assert.deepEqual(live.fit.nodes, whole.fit.nodes);
+        if (once.paths.length > 3) assert.ok(settled.length > 0, "nothing settled while drawing");
+      });
+    }
   }
 });

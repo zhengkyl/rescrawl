@@ -1,5 +1,5 @@
 import { dist, type Point3 } from "../src/math.ts";
-import type { OutlineNode } from "../src/Outline.ts";
+import type { OutlineNode } from "../src/brush/outline.ts";
 
 type Poly = { x: number; y: number }[];
 

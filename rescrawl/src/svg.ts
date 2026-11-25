@@ -1,8 +1,6 @@
 import type { CubicNode } from "./centerline/fit.ts";
-import type { Point2 } from "./math.ts";
-import type { OutlineNode } from "./Outline.ts";
+import type { OutlineNode } from "./brush/outline.ts";
 
-// relative commands, implied repeats, shortest numbers, dropped separators
 // coordinates are whole grid steps (10^-digits), so deltas don't drift
 class Pen {
   private out = "";
@@ -96,20 +94,18 @@ class Pen {
   }
 }
 
-const DEFAULT_DIGITS = 1;
+const GRID = 0.2; // multiple of tolerance
 
-export function centerlinePath(pts: Point2[], digits = DEFAULT_DIGITS): string {
-  if (pts.length === 0) return "";
-  const pen = new Pen(digits);
-  pen.moveTo(pts[0].x, pts[0].y);
-  for (let i = 1; i < pts.length; i++) pen.lineTo(pts[i].x, pts[i].y);
-  return pen.toString();
+export function gridDigits(tolerance: number): number {
+  return Math.max(0, Math.ceil(Math.log10(1 / (GRID * tolerance))));
 }
 
-export function fitPath(ns: CubicNode[], digits = DEFAULT_DIGITS): string {
+export function fitPath(ns: CubicNode[], digits: number): string {
   if (ns.length === 0) return "";
   const pen = new Pen(digits);
   pen.moveTo(ns[0].x, ns[0].y);
+  // one node: a dot, drawn by its round cap
+  if (ns.length === 1) return pen.toString() + "h0";
   for (let i = 1; i < ns.length; i++) {
     const a = ns[i - 1];
     const b = ns[i];
@@ -118,8 +114,7 @@ export function fitPath(ns: CubicNode[], digits = DEFAULT_DIGITS): string {
   return pen.toString();
 }
 
-// each piece is its own closed subpath
-export function outlineCubicPath(pieces: OutlineNode[][], digits = DEFAULT_DIGITS): string {
+export function outlineCubicPath(pieces: OutlineNode[][], digits: number): string {
   const pen = new Pen(digits);
   for (const cs of pieces) {
     const n = cs.length;

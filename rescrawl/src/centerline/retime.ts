@@ -32,11 +32,11 @@ export function retimeDuplicateTimestamps(samples: Sample[], o: Required<RetimeO
     for (let j = start; j <= end; j++) {
       const s = samples[j].s;
       const step = s - from;
-      if (s === last) {
+      if (j === end) {
         t = tEnd;
       } else if (last - s <= o.lookahead) {
         t = lerp(t, tEnd, step / (last - from));
-      } else if (step > 0) {
+      } else {
         t = lerp(t, tEnd, 1 - Math.exp(-step / o.lookahead));
       }
       samples[j].t = t;

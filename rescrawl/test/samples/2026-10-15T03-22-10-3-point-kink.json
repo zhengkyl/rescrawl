@@ -26,7 +26,7 @@
     "fitHorizon": 20,
     "incremental": true,
     "crSpacing": 0,
-    "reparam": 2,
+    "refitRounds": 2,
     "holdBack": false,
     "denseTail": false,
     "iterations": 3,
