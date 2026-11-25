@@ -6,36 +6,30 @@
 
 body {
   height: 100vh;
+  /* the visible viewport, so mobile browser bars don't cover the timeline */
+  height: 100dvh;
   overflow: hidden;
+  /* no long-press text selection or callout; no double-tap zoom */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
   font-family: sans-serif;
   background: #1a1a1a;
 }
 
 #app {
   display: flex;
-  flex-direction: row;
-  height: 100%;
-}
-
-#main-area {
-  flex: 1;
-  display: flex;
   flex-direction: column;
-  min-width: 0;
+  height: 100%;
 }
 
 #canvas-wrapper {
   position: relative;
   flex: 1;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-#canvas-area {
-  flex: 1;
-  overflow: hidden;
-  min-height: 0;
+  /* on an HTML element too: Safari has not always honoured it on <svg> */
+  touch-action: none;
 }
 
 #floating-toolbar {
@@ -46,10 +40,6 @@ body {
   gap: 6px;
   z-index: 10;
   pointer-events: none;
-}
-
-#floating-toolbar button {
-  pointer-events: auto;
 }
 
 #zoom-control {
@@ -96,6 +86,10 @@ body {
   pointer-events: none;
 }
 
+#canvas-svg.select {
+  cursor: default;
+}
+
 /* Live recording: red crosshair cursor */
 #canvas-svg.live {
   cursor:
@@ -104,44 +98,72 @@ body {
     crosshair;
 }
 
-#panel {
-  width: 240px;
-  min-height: 0;
-  background: #222;
-  border-left: 1px solid #333;
+#knobs {
+  position: absolute;
+  top: 52px;
+  left: 12px;
+  z-index: 10;
+  width: 280px;
+  max-height: calc(100% - 104px);
+  overflow-y: auto;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  color: #ccc;
-}
-/* Everything under the button row scrolls; the buttons stay put. */
-#panel-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  gap: 12px;
+  border-radius: 8px;
+  background: rgba(34, 34, 34, 0.95);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  color: #aaa;
+  font-size: 11px;
   scrollbar-width: thin;
   scrollbar-color: #444 transparent;
 }
-body.panel-left #panel {
-  order: -1;
-  border-left: none;
-  border-right: 1px solid #333;
+#knobs {
+  touch-action: pan-y;
 }
-
-#controls {
+#knobs section {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px;
-  border-bottom: 1px solid #333;
+  flex-direction: column;
+  gap: 6px;
 }
-
-#bottom-bar {
+#knobs h2 {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.knob {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: #222;
-  border-top: 1px solid #333;
+}
+.knob span {
+  flex: 0 0 110px;
+}
+.knob input {
+  flex: 1;
+  min-width: 0;
+  accent-color: #4f8ef7;
+}
+.knob output {
+  flex: 0 0 36px;
+  text-align: right;
+  color: #ddd;
+  font-variant-numeric: tabular-nums;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.toggle input {
+  accent-color: #4f8ef7;
+}
+#knobs button {
+  background: #555;
+  color: #fff;
 }
 
 button {
@@ -161,10 +183,8 @@ button:disabled {
   cursor: default;
 }
 
-#btn-undo,
-#btn-redo,
-#btn-reset-view,
-#btn-clear {
+#floating-toolbar button {
+  pointer-events: auto;
   background: #333;
   color: #ccc;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
@@ -172,615 +192,148 @@ button:disabled {
   display: flex;
   align-items: center;
 }
-#btn-clear {
+#floating-toolbar #btn-clear {
   color: #f87171;
 }
-#btn-play {
+#floating-toolbar #btn-knobs.on {
   background: #4f8ef7;
   color: #fff;
 }
-#btn-export {
-  background: #555;
-  color: #fff;
-}
-#btn-import {
-  background: #555;
-  color: #fff;
-}
 
-.timeline {
-  flex: 1;
+#tray {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  height: 40px;
+  padding: 0 18px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
+  align-items: flex-end;
+  gap: 10px;
+  border-radius: 14px 14px 0 0;
+  background: linear-gradient(#4a3f35, #2a231d 60%, #1c1814);
+  box-shadow:
+    inset 0 2px 0 rgba(255, 255, 255, 0.12),
+    0 -2px 10px rgba(0, 0, 0, 0.35);
+  /* tools sink below the tray's lip; only their tops show */
+  clip-path: inset(-200px -1000px 0 -1000px);
+}
+.tool {
+  padding: 0;
+  background: none;
+  line-height: 0;
+  transform: translateY(70px);
+  transition: transform 0.18s ease-out;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.5));
+}
+@media (hover: hover) {
+  .tool:hover {
+    opacity: 1;
+    transform: translateY(62px);
+  }
+}
+.tool.on {
+  transform: translateY(28px);
 }
 
-.timeline-header {
+#selection {
+  position: absolute;
+  left: calc(100% + 12px);
+  bottom: 8px;
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.timeline-readout {
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: #aaa;
+  gap: 6px;
+  padding: 4px 8px;
   white-space: nowrap;
-}
-
-.timeline-zoom {
-  margin-left: auto;
-  min-width: 38px;
-  text-align: right;
+  border-radius: 8px;
+  background: rgba(34, 34, 34, 0.92);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
   font-size: 12px;
+  color: #999;
   font-variant-numeric: tabular-nums;
-  color: #aaa;
-  cursor: pointer;
-  user-select: none;
+}
+#selection button {
+  padding: 3px 8px;
+  background: #333;
+  color: #ccc;
+}
+#selection button.on {
+  background: #4f8ef7;
+  color: #fff;
 }
 
-.timeline-track {
-  width: 100%;
-  min-width: 0;
-  height: 44px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  background: #1a1a1a;
-  border: 1px solid #333;
-  border-radius: 6px;
-  scrollbar-width: thin;
-  scrollbar-color: #444 transparent;
+#timeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(22px + env(safe-area-inset-bottom, 0px));
+  padding: 0 8px env(safe-area-inset-bottom, 0px);
+  background: #1c1c1c;
 }
-.timeline-track.is-empty {
-  opacity: 0.5;
+#btn-play {
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  color: #ccc;
 }
-.timeline-track::-webkit-scrollbar {
-  height: 8px;
-}
-.timeline-track::-webkit-scrollbar-thumb {
-  background: #444;
-  border-radius: 4px;
-}
-
-.timeline-content {
+#timeline .track {
   position: relative;
-  min-width: 100%;
-  height: 100%;
+  flex: 1;
+  height: 22px;
   cursor: pointer;
   touch-action: none;
 }
-
-.timeline-ruler {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.timeline-tick {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  border-left: 1px solid #2e2e2e;
-}
-.timeline-tick-label {
-  position: absolute;
-  top: 3px;
-  left: 4px;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: #777;
-  pointer-events: none;
-}
-
-/* Per-stroke segments: a line from start to end time with circular caps,
-   stacked into lanes when strokes overlap in time. */
-.timeline-strokes {
-  position: absolute;
-  top: 22px;
-  left: 0;
-  right: 0;
-  pointer-events: none;
-}
-.timeline-stroke {
-  position: absolute;
-  height: 3px;
-  margin-top: -1.5px;
-  background: #b9c0cc;
-  border-radius: 2px;
-}
-.timeline-stroke::before,
-.timeline-stroke::after {
+#timeline .track::before {
   content: "";
   position: absolute;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: inherit;
-  transform: translate(-50%, -50%);
-}
-.timeline-stroke::before {
   left: 0;
+  right: 0;
+  top: 50%;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 2px;
+  background: #3a3a3a;
 }
-.timeline-stroke::after {
-  left: 100%;
-}
-.timeline-stroke.is-selected {
+#timeline .played {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 2px;
   background: #4f8ef7;
+  pointer-events: none;
 }
-.timeline-stroke.is-live {
+#timeline .head {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%;
+  background: #fff;
+  pointer-events: none;
+}
+#timeline.live .played {
   background: #ef4444;
 }
-
-.timeline-played {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  background: rgba(79, 142, 247, 0.16);
-  pointer-events: none;
+#timeline.live .head {
+  background: #ef4444;
 }
-
-.timeline-playhead {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: repeating-linear-gradient(to bottom, #4f8ef7 0 4px, transparent 4px 8px);
-  pointer-events: none;
-}
-.timeline-playhead-handle {
-  position: absolute;
-  top: -1px;
-  left: 50%;
-  width: 11px;
-  height: 11px;
-  transform: translateX(-50%);
-  background: #4f8ef7;
-  border-radius: 0 0 3px 3px;
-}
-
-/* While recording, the playhead is the live head and carries the grace-period
-   countdown ring (replacing the old floating stamina ring). */
-.timeline.is-live .timeline-played {
-  background: rgba(239, 68, 68, 0.14);
-}
-.timeline.is-live .timeline-playhead {
-  background: repeating-linear-gradient(to bottom, #ef4444 0 4px, transparent 4px 8px);
-}
-.timeline.is-live .timeline-readout {
-  color: #ef4444;
-}
-.timeline-grace {
-  position: absolute;
-  top: 1px;
-  left: 50%;
-  transform: translateX(-50%);
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
-}
-
-/* The "tentative end": where committed content stops — the replay/export
-   boundary. Solid (a definitive content edge), versus the dashed playhead, which
-   rides the current time and can sit past the content after live mode ends. */
-.timeline-tentative {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  margin-left: -1px;
-  background: #4f8ef7;
-  pointer-events: none;
-}
-.timeline-tentative-handle {
-  position: absolute;
-  top: -1px;
-  left: 50%;
-  width: 0;
-  height: 0;
-  transform: translateX(-50%);
-  border-left: 5px solid transparent;
-  border-right: 5px solid transparent;
-  border-top: 6px solid #4f8ef7;
-}
-
-#btn-cap-dt,
-#btn-align,
-#btn-align-apply,
-#btn-settings {
-  background: #555;
-  color: #fff;
-}
-#btn-settings {
-  flex: 0 0 auto;
-  padding: 6px 8px;
-  display: flex;
-  align-items: center;
-}
-#btn-cap-dt.active,
-#btn-align.active {
-  background: #4f8ef7;
-}
-
-.panel-section {
-  padding: 12px;
-  border-bottom: 1px solid #333;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.strategy-row {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-
-.strategy-toggle {
-  flex: 1;
-  background: #555;
-  color: #ccc;
-  transition:
-    background 0.1s,
-    color 0.1s;
-}
-
-.strategy-param {
-  width: 52px;
-  flex: 0 0 52px;
-  background: #1a1a1a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #eee;
-  font-size: 13px;
-  padding: 4px 6px;
-  outline: none;
-}
-.strategy-param:disabled {
-  opacity: 0.4;
-}
-.strategy-param:focus {
-  border-color: #4f8ef7;
-}
-
-/* One per row, in pipeline order — the list itself is the diagram. */
-.debug-layers {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 2px 2px 8px;
-}
-.debug-layer {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: #aaa;
-  cursor: pointer;
-}
-.debug-layer input[type="checkbox"] {
-  accent-color: #4f8ef7;
-}
-.debug-sep {
-  height: 1px;
-  margin: 3px 0;
-  background: #333;
-}
-.stage-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-}
-
-.stage-counts {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid #333;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: #888;
-}
-.stage-count {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.stage-count .stage-name {
-  flex: 1 1 auto;
-}
-.stage-count .stage-n {
-  font-variant-numeric: tabular-nums;
-  color: #ccc;
-}
-
-.ink-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  font-size: 11px;
-  color: #aaa;
-  cursor: pointer;
-}
-.ink-toggle input[type="checkbox"] {
-  accent-color: #4f8ef7;
-}
-
-.ink-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  font-size: 11px;
-  color: #aaa;
-}
-.ink-row .ink-label {
-  flex: 0 0 84px;
-}
-.ink-row input[type="range"] {
-  flex: 1;
-  min-width: 0;
-  accent-color: #4f8ef7;
-}
-.ink-row .ink-value {
-  flex: 0 0 40px;
-  text-align: right;
-  color: #ddd;
-  font-variant-numeric: tabular-nums;
-}
-
-.check-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #ccc;
-  cursor: pointer;
-  accent-color: #4f8ef7;
-}
-
-.section-label {
-  width: 100%;
-  font-size: 11px;
-  font-weight: 600;
-  color: #666;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.btn-row button,
-.btn-row input[type="number"] {
-  flex: 1;
-  min-width: 0;
-}
-.btn-row input[type="number"] {
-  background: #1a1a1a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #eee;
-  font-size: 13px;
-  padding: 4px 6px;
-  outline: none;
-}
-
-.btn-row {
-  display: flex;
-  gap: 8px;
-  width: 100%;
-}
-.btn-row button {
-  flex: 1;
-}
-
-dialog {
-  background: #2a2a2a;
-  border: 1px solid #444;
-  border-radius: 8px;
-  color: #ccc;
-  padding: 20px;
-  min-width: 260px;
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  translate: -50% -50%;
-  margin: 0;
-}
-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.5);
-}
-.dialog-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 14px;
-  font-size: 13px;
-}
-.dialog-field label {
-  color: #888;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.dialog-field input[type="text"] {
-  background: #1a1a1a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #eee;
-  font-size: 13px;
-  padding: 5px 8px;
-  outline: none;
-}
-.dialog-field input[type="text"]:focus {
-  border-color: #4f8ef7;
-}
-.export-form {
-  width: min(88vw, 660px);
-}
-.preview-hint {
-  color: #666;
-  font-size: 11px;
-  margin-left: auto;
-}
-.preview-wrap {
-  position: relative;
-}
-.export-preview {
-  display: block;
-  width: 100%;
-  height: min(60vh, 460px);
-  background: #fff;
-  border: 1px solid #444;
-  border-radius: 4px;
-  touch-action: none;
-  cursor: grab;
-}
-.svg-preview {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+#timeline.live .track {
   cursor: default;
-  overflow: hidden;
-}
-.svg-preview img {
-  max-width: 100%;
-  max-height: 100%;
-}
-.format-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.format-btn {
-  font-size: 13px;
-  padding: 4px 12px;
-  border-radius: 4px;
-  border: 1px solid #444;
-  background: #1a1a1a;
-  color: #999;
-  font-family: inherit;
-}
-.format-btn:hover {
-  color: #eee;
-}
-.format-btn.on {
-  border-color: #4f8ef7;
-  color: #fff;
-  background: #23324a;
-}
-.format-hint {
-  color: #666;
-  font-size: 11px;
-  margin-left: 4px;
-}
-.dialog-field input[type="range"] {
-  width: 100%;
-  accent-color: #4f8ef7;
-  cursor: pointer;
-}
-.field-value {
-  margin-left: auto;
-  color: #ccc;
-  font-variant-numeric: tabular-nums;
-}
-.export-size {
-  flex-direction: row;
-  align-items: center;
-  color: #888;
-  font-size: 12px;
-}
-.preview-reset {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px;
-  border-radius: 4px;
-  background: rgba(42, 42, 42, 0.85);
-  color: #ccc;
-  border: 1px solid #444;
-}
-.preview-reset:hover {
-  color: #fff;
-  background: #2a2a2a;
-}
-.dialog-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-#export-confirm {
-  background: #4f8ef7;
-  color: #fff;
-}
-#export-cancel,
-#settings-close,
-#btn-settings-reset {
-  background: #555;
-  color: #fff;
 }
 
-#status {
-  font-size: 12px;
-  color: #888;
-  align-self: center;
-}
-
-#active-stroke-editor {
-  padding: 12px;
-  border-top: 1px solid #333;
-}
-.ase-empty {
-  font-size: 12px;
-  color: #666;
-  text-align: center;
-}
-.ase-header {
-  font-size: 11px;
-  font-weight: 600;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 8px;
-}
-.ase-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 6px;
-}
-.ase-fields label {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
-  color: #777;
-}
-.ase-fields input {
-  width: 100%;
-  background: #1a1a1a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #eee;
-  font-size: 12px;
-  padding: 3px 5px;
-  outline: none;
-}
-.ase-fields input:focus {
-  border-color: #4f8ef7;
-}
-.ase-propagate {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 10px;
-  font-size: 12px;
-  color: #aaa;
-  cursor: pointer;
+/* beside the tray runs off a phone's screen: above the lifted tool instead */
+@media (max-width: 700px) {
+  #selection {
+    left: 50%;
+    bottom: 100px;
+    transform: translateX(-50%);
+  }
 }

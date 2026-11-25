@@ -1,7 +1,7 @@
 import { batch, useComputed, useSignal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 import { useStrokes } from "../strokeStore";
-import { strokesBounds } from "../utils";
+import { strokesBounds } from "../stroke";
 
 export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 10;
@@ -11,7 +11,7 @@ type View = { panX: number; panY: number; zoom: number };
 
 const clampZoom = (z: number) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 
-export function useCanvasView(panButton = 1) {
+export function useCanvasView() {
   const { strokes } = useStrokes();
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -23,7 +23,6 @@ export function useCanvasView(panButton = 1) {
   );
 
   function applyView(v: View) {
-    // Batched so the transform recomputes once per gesture frame, not per axis.
     batch(() => {
       panX.value = v.panX;
       panY.value = v.panY;
@@ -37,7 +36,6 @@ export function useCanvasView(panButton = 1) {
 
   const viewportRect = () => svgRef.current!.getBoundingClientRect();
 
-  // Zoom about a screen point (client coords).
   function zoomAt(clientX: number, clientY: number, factor: number) {
     const rect = viewportRect();
     const mx = clientX - rect.left;
@@ -49,7 +47,6 @@ export function useCanvasView(panButton = 1) {
     applyView({ panX: mx - cx * newZoom, panY: my - cy * newZoom, zoom: newZoom });
   }
 
-  // Zoom to an absolute level about the viewport centre — used by the slider.
   function zoomTo(z: number) {
     const rect = viewportRect();
     zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, clampZoom(z) / zoom.value);
@@ -67,10 +64,8 @@ export function useCanvasView(panButton = 1) {
     const rect = viewportRect();
     if (rect.width === 0 || rect.height === 0) return;
 
-    // Read (not subscribed): fitToView only ever runs from an effect or a click.
     const b = strokesBounds(strokes.value);
     if (!b) {
-      // Empty canvas: park the origin at the viewport centre at 1:1.
       applyView({ panX: rect.width / 2, panY: rect.height / 2, zoom: 1 });
       return;
     }
@@ -82,9 +77,6 @@ export function useCanvasView(panButton = 1) {
     applyView({ panX: rect.width / 2 - cx * z, panY: rect.height / 2 - cy * z, zoom: z });
   }
 
-  // Mount: fit, and attach the camera input gestures — wheel to pan, ctrl+wheel
-  // to zoom, and middle-mouse drag to pan. Owning the pan gesture here (rather
-  // than in the drawing pointer handlers) keeps the camera fully self-contained.
   useEffect(() => {
     fitToView();
     const svg = svgRef.current!;
@@ -102,7 +94,7 @@ export function useCanvasView(panButton = 1) {
       }
     }
     function handlePointerDown(e: PointerEvent) {
-      if (e.button !== panButton) return;
+      if (e.button !== 1) return;
       svg.setPointerCapture(e.pointerId);
       panning = true;
       lastX = e.clientX;
@@ -132,5 +124,5 @@ export function useCanvasView(panButton = 1) {
     };
   }, []);
 
-  return { svgRef, transform, fitToView, svgToContent, zoom, zoomTo };
+  return { svgRef, transform, fitToView, svgToContent, zoom, zoomTo, zoomAt, pan };
 }

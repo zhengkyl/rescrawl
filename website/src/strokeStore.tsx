@@ -2,12 +2,16 @@ import { batch, computed, signal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { createContext } from "preact";
 import { useContext, useMemo } from "preact/hooks";
-import type { Stroke } from "./utils";
-import { LIVE_TIMEOUT, strokeEnd, strokeStart } from "./utils";
+import type { Stroke } from "./stroke";
+import { LIVE_TIMEOUT, strokeEnd, strokeStart } from "./stroke";
 
-type Op = { type: "append"; stroke: Stroke } | { type: "replace"; prev: Stroke[]; next: Stroke[] };
+type Op =
+  | { type: "append"; stroke: Stroke }
+  | { type: "replace"; prev: Stroke[]; next: Stroke[] }
+  | { type: "set"; index: number; prev: Stroke; next: Stroke };
 
-type Entry = { op: Op; prevFocus: number; nextFocus: number };
+// where the playhead goes on undo and redo; null leaves it
+type Entry = { op: Op; prevFocus: number | null; nextFocus: number | null };
 
 export function applyStrokeOp(s: Stroke[], op: Op, dir: "undo" | "redo"): Stroke[] {
   switch (op.type) {
@@ -15,12 +19,15 @@ export function applyStrokeOp(s: Stroke[], op: Op, dir: "undo" | "redo"): Stroke
       return dir === "undo" ? s.slice(0, -1) : [...s, op.stroke];
     case "replace":
       return dir === "undo" ? op.prev : op.next;
+    case "set": {
+      const out = s.slice();
+      out[op.index] = dir === "undo" ? op.prev : op.next;
+      return out;
+    }
   }
 }
 
-// Park just past a stroke, matching where a fresh draw leaves the playhead.
 const parkAfter = (s: Stroke) => strokeEnd(s) + LIVE_TIMEOUT;
-// Park past the last of a set — 0 when empty, as after a clear.
 const parkAfterAll = (list: Stroke[]) => list.reduce((max, s) => Math.max(max, parkAfter(s)), 0);
 
 function createStrokeStore() {
@@ -30,7 +37,6 @@ function createStrokeStore() {
 
   const duration = computed(() => strokes.value.reduce((max, s) => Math.max(max, strokeEnd(s)), 0));
 
-  // drop any redo branch, append, advance.
   function commit(next: Stroke[], entry: Entry) {
     const kept = historyStack.value.slice(0, historyIndex.value + 1);
     batch(() => {
@@ -57,6 +63,17 @@ function createStrokeStore() {
     });
   }
 
+  function set(index: number, stroke: Stroke) {
+    const prev = strokes.value[index];
+    const next = strokes.value.slice();
+    next[index] = stroke;
+    commit(next, {
+      op: { type: "set", index, prev, next: stroke },
+      prevFocus: null,
+      nextFocus: null,
+    });
+  }
+
   return {
     strokes,
     duration,
@@ -64,6 +81,7 @@ function createStrokeStore() {
     historyIndex,
     append,
     replace,
+    set,
   };
 }
 

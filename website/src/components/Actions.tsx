@@ -1,14 +1,18 @@
 import { useApp } from "../context";
 import { useStrokes } from "../strokeStore";
 
-export function Toolbar({
+export function Actions({
   onUndo,
   onRedo,
   onClear,
+  knobsOpen,
+  onToggleKnobs,
 }: {
   onUndo: () => void;
   onRedo: () => void;
   onClear: () => void;
+  knobsOpen: boolean;
+  onToggleKnobs: () => void;
 }) {
   const { clock, view } = useApp();
 
@@ -83,6 +87,28 @@ export function Toolbar({
         >
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <path d="M9 9h6v6H9z" />
+        </svg>
+      </button>
+      <button
+        id="btn-knobs"
+        class={knobsOpen ? "on" : ""}
+        onClick={onToggleKnobs}
+        title="Ink knobs"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" />
+          <circle cx="16" cy="6" r="2" />
+          <circle cx="10" cy="12" r="2" />
+          <circle cx="18" cy="18" r="2" />
         </svg>
       </button>
     </div>
