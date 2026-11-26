@@ -1,17 +1,13 @@
-import { batch, computed, signal } from "@preact/signals";
+import { batch, signal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { createContext } from "preact";
 import { useContext, useMemo } from "preact/hooks";
 import type { Stroke } from "./stroke";
-import { LIVE_TIMEOUT, strokeEnd, strokeStart } from "./stroke";
 
 type Op =
   | { type: "append"; stroke: Stroke }
   | { type: "replace"; prev: Stroke[]; next: Stroke[] }
-  | { type: "set"; index: number; prev: Stroke; next: Stroke };
-
-// where the playhead goes on undo and redo; null leaves it
-type Entry = { op: Op; prevFocus: number | null; nextFocus: number | null };
+  | { type: "set"; indices: number[]; prev: Stroke[]; next: Stroke[] };
 
 export function applyStrokeOp(s: Stroke[], op: Op, dir: "undo" | "redo"): Stroke[] {
   switch (op.type) {
@@ -21,62 +17,45 @@ export function applyStrokeOp(s: Stroke[], op: Op, dir: "undo" | "redo"): Stroke
       return dir === "undo" ? op.prev : op.next;
     case "set": {
       const out = s.slice();
-      out[op.index] = dir === "undo" ? op.prev : op.next;
+      const from = dir === "undo" ? op.prev : op.next;
+      op.indices.forEach((i, k) => (out[i] = from[k]));
       return out;
     }
   }
 }
 
-const parkAfter = (s: Stroke) => strokeEnd(s) + LIVE_TIMEOUT;
-const parkAfterAll = (list: Stroke[]) => list.reduce((max, s) => Math.max(max, parkAfter(s)), 0);
-
 function createStrokeStore() {
   const strokes = signal<Stroke[]>([]);
-  const historyStack = signal<Entry[]>([]);
+  const historyStack = signal<Op[]>([]);
   const historyIndex = signal(-1);
 
-  const duration = computed(() => strokes.value.reduce((max, s) => Math.max(max, strokeEnd(s)), 0));
-
-  function commit(next: Stroke[], entry: Entry) {
+  function commit(next: Stroke[], op: Op) {
     const kept = historyStack.value.slice(0, historyIndex.value + 1);
     batch(() => {
-      historyStack.value = [...kept, entry];
+      historyStack.value = [...kept, op];
       historyIndex.value = kept.length;
       strokes.value = next;
     });
   }
 
   function append(stroke: Stroke) {
-    commit([...strokes.value, stroke], {
-      op: { type: "append", stroke },
-      prevFocus: strokeStart(stroke),
-      nextFocus: parkAfter(stroke),
-    });
+    commit([...strokes.value, stroke], { type: "append", stroke });
   }
 
   function replace(next: Stroke[]) {
-    const prev = strokes.value;
-    commit(next, {
-      op: { type: "replace", prev, next },
-      prevFocus: parkAfterAll(prev),
-      nextFocus: parkAfterAll(next),
-    });
+    commit(next, { type: "replace", prev: strokes.value, next });
   }
 
-  function set(index: number, stroke: Stroke) {
-    const prev = strokes.value[index];
+  // one undo step for all of them
+  function set(indices: number[], changed: Stroke[]) {
+    const prev = indices.map((i) => strokes.value[i]);
     const next = strokes.value.slice();
-    next[index] = stroke;
-    commit(next, {
-      op: { type: "set", index, prev, next: stroke },
-      prevFocus: null,
-      nextFocus: null,
-    });
+    indices.forEach((i, k) => (next[i] = changed[k]));
+    commit(next, { type: "set", indices, prev, next: changed });
   }
 
   return {
     strokes,
-    duration,
     historyStack,
     historyIndex,
     append,
@@ -85,7 +64,7 @@ function createStrokeStore() {
   };
 }
 
-export type StrokeStore = ReturnType<typeof createStrokeStore>;
+type StrokeStore = ReturnType<typeof createStrokeStore>;
 
 const StrokeContext = createContext<StrokeStore>(null as unknown as StrokeStore);
 

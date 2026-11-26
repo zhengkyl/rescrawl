@@ -4,14 +4,15 @@ import { useEffect, useMemo, useRef } from "preact/hooks";
 import { fitPath } from "rescrawl";
 import { useApp } from "../context";
 import type { Drawn, InkOptions } from "../ink";
-import { INK_COLOR, StrokeInk } from "../ink";
+import { StrokeInk } from "../ink";
 import { useStrokes } from "../strokeStore";
 import type { Point, Stroke } from "../stroke";
-import { strokeEnd, strokeStart, withinStroke } from "../stroke";
+import { eventTime, timeNow, strokeEnd, strokeStart } from "../stroke";
 import { drawInk } from "./drawInk";
 
 const INK_CHUNK = 128; // strokes per settled band
 const PICK_PX = 8; // how close, in screen px, a click must come to a stroke's edge
+const DRAG_PX = 6; // screen px a select press moves before it is a drag, not a click
 // Two fingers always pan; zoom starts once their spread changes by ZOOM_SLOP,
 // or PAN_ZOOM_SLOP once the midpoint has moved PAN_PX screen px.
 const ZOOM_SLOP = 1.15;
@@ -23,15 +24,18 @@ const TAP_MS = 250;
 const TAP_PX = 10;
 const CURVE_COLOR = "#06b6d4";
 const HANDLE_COLOR = "#ec4899";
+const MARQUEE_COLOR = "#4f8ef7";
 
 type InkCache = WeakMap<Stroke, Drawn>;
+type Box = { x0: number; y0: number; x1: number; y1: number };
 
+// `ends`: replay time each stroke finishes, null outside replay, where all are drawn;
 // `settled` changes only when a stroke in the band crosses the playhead
-type Band = { strokes: Stroke[]; settled: ReadonlySignal<number> };
+type Band = { strokes: Stroke[]; ends: number[] | null; settled: ReadonlySignal<number> };
 
-function countSettled(strokes: Stroke[], elapsed: Signal<number>): number {
+function countSettled(ends: number[], elapsed: Signal<number>): number {
   let n = 0;
-  for (const s of strokes) if (strokeEnd(s) <= elapsed.value) n++;
+  for (const end of ends) if (end <= elapsed.value) n++;
   return n;
 }
 
@@ -44,6 +48,7 @@ function sameStrokes(a: Stroke[], b: Stroke[]): boolean {
 // the settled count is the subscription; the playhead is only peeked
 function InkBand({
   strokes,
+  ends,
   settled,
   elapsed,
   inkOptions,
@@ -54,13 +59,13 @@ function InkBand({
   return (
     <g>
       {strokes.map((s, j) => {
-        if (strokeEnd(s) > drawTime) return null;
+        if (ends !== null && ends[j] > drawTime) return null;
         let ink = cache.get(s);
         if (ink === undefined) {
           ink = new StrokeInk(s, inkOptions).whole();
           cache.set(s, ink);
         }
-        return drawInk(ink, j, INK_COLOR);
+        return drawInk(ink, j);
       })}
     </g>
   );
@@ -69,19 +74,21 @@ function InkBand({
 // replayed as drawn, fed forward with the playhead, started over when it goes back
 function ActiveInk({
   strokes,
+  offsets,
   elapsed,
   inkOptions,
 }: {
   strokes: Stroke[];
+  offsets: number[];
   elapsed: Signal<number>;
   inkOptions: InkOptions;
 }) {
   const inks = useMemo(() => new WeakMap<Stroke, StrokeInk>(), [inkOptions]);
-  const t = elapsed.value;
   return (
     <g>
       {strokes.map((s, i) => {
-        if (!withinStroke(s, t)) {
+        const t = elapsed.value + offsets[i];
+        if (t < strokeStart(s) || t >= strokeEnd(s)) {
           inks.delete(s);
           return null;
         }
@@ -90,7 +97,7 @@ function ActiveInk({
           ink = new StrokeInk(s, inkOptions);
           inks.set(s, ink);
         }
-        return drawInk(ink.at(t), i, INK_COLOR);
+        return drawInk(ink.at(t), i);
       })}
     </g>
   );
@@ -99,7 +106,7 @@ function ActiveInk({
 // its own component, so the per-frame read skips <Canvas>
 function LiveStroke({ ink }: { ink: Signal<Drawn | null> }) {
   if (ink.value === null) return null;
-  return <g>{drawInk(ink.value, "live", INK_COLOR)}</g>;
+  return <g>{drawInk(ink.value, "live")}</g>;
 }
 
 // a mouse reports a fixed 0.5
@@ -126,16 +133,13 @@ function pickStroke(
   strokes: Stroke[],
   x: number,
   y: number,
-  t: number,
   reach: number,
   o: InkOptions,
 ): number | null {
   let best: number | null = null;
   let bestD = reach;
   strokes.forEach((s, i) => {
-    if (strokeStart(s) > t) return;
-    // widths are screen px at the stroke's zoom
-    const half = (s.style === "pen" ? o.width : o.maxWidth) / 2 / s.zoom;
+    const half = s.size / 2 / s.zoom;
     const d = distToPath(s.points, x, y) - half;
     if (d <= bestD) {
       best = i;
@@ -145,21 +149,71 @@ function pickStroke(
   return best;
 }
 
-function Inspect({
-  stroke,
-  elapsed,
-  inkOptions,
-}: {
-  stroke: Stroke;
-  elapsed: Signal<number>;
-  inkOptions: InkOptions;
-}) {
-  const t = elapsed.value;
-  if (t < strokeStart(stroke)) return null;
-  const ink = new StrokeInk(stroke, inkOptions);
-  if (t < strokeEnd(stroke)) ink.at(t);
-  else ink.whole();
-  const ns = ink.fit.nodes;
+// Liang-Barsky: some part of a to b lies in the box
+function segmentInBox(a: Point, b: Point, box: Box): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const clip = (p: number, q: number) => {
+    if (p === 0) return q >= 0;
+    const r = q / p;
+    if (p < 0) {
+      if (r > t1) return false;
+      t0 = Math.max(t0, r);
+    } else {
+      if (r < t0) return false;
+      t1 = Math.min(t1, r);
+    }
+    return true;
+  };
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  return (
+    clip(-dx, a.x - Math.min(box.x0, box.x1)) &&
+    clip(dx, Math.max(box.x0, box.x1) - a.x) &&
+    clip(-dy, a.y - Math.min(box.y0, box.y1)) &&
+    clip(dy, Math.max(box.y0, box.y1) - a.y)
+  );
+}
+
+// every stroke the box touches
+function strokesInBox(strokes: Stroke[], box: Box): number[] {
+  const hits: number[] = [];
+  strokes.forEach((s, i) => {
+    const ps = s.points;
+    for (let j = 0; j < ps.length; j++) {
+      if (segmentInBox(ps[j], ps[Math.min(j + 1, ps.length - 1)], box)) {
+        hits.push(i);
+        return;
+      }
+    }
+  });
+  return hits;
+}
+
+function Marquee({ box }: { box: Signal<Box | null> }) {
+  const b = box.value;
+  if (b === null) return null;
+  return (
+    <rect
+      x={Math.min(b.x0, b.x1)}
+      y={Math.min(b.y0, b.y1)}
+      width={Math.abs(b.x1 - b.x0)}
+      height={Math.abs(b.y1 - b.y0)}
+      fill={MARQUEE_COLOR}
+      fill-opacity="0.1"
+      stroke={MARQUEE_COLOR}
+      stroke-width="1"
+      vector-effect="non-scaling-stroke"
+    />
+  );
+}
+
+function Inspect({ stroke, inkOptions }: { stroke: Stroke; inkOptions: InkOptions }) {
+  const ns = useMemo(() => {
+    const ink = new StrokeInk(stroke, inkOptions);
+    ink.whole();
+    return ink.fit.nodes;
+  }, [stroke, inkOptions]);
   const mark = (
     x: number,
     y: number,
@@ -213,7 +267,20 @@ function Inspect({
 }
 
 export function Canvas() {
-  const { view, clock, inkOptions, tool, selected, setSelected, undo, redo } = useApp();
+  const {
+    view,
+    clock,
+    timing,
+    inkOptions,
+    brushes,
+    tool,
+    selected,
+    setSelected,
+    undo,
+    redo,
+    closingPress,
+  } = useApp();
+  const replaying = tool === "replay";
   const store = useStrokes();
 
   const currentStrokeRef = useRef<Stroke | null>(null);
@@ -222,6 +289,20 @@ export function Canvas() {
   const drawingIdRef = useRef<number | null>(null);
   const drawLoopRef = useRef<number | null>(null);
   const liveInk = useSignal<Drawn | null>(null);
+  // where the select press went down, in content and screen px; shift adds to the selection
+  const selectRef = useRef<{ x: number; y: number; sx: number; sy: number; add: boolean } | null>(
+    null,
+  );
+  const marquee = useSignal<Box | null>(null);
+  // The drawing or selecting press: where and when it went down, whether it has moved, and
+  // whether it closed something on the way. A tap that closed something does nothing else.
+  const pressRef = useRef<{
+    x: number;
+    y: number;
+    t0: number;
+    moved: boolean;
+    closing: boolean;
+  } | null>(null);
 
   // fingers on the canvas; two or more pan and pinch until all are lifted
   const touchesRef = useRef(new Map<number, { x: number; y: number; x0: number; y0: number }>());
@@ -246,6 +327,10 @@ export function Canvas() {
   );
 
   function handlePointerDown(e: PointerEvent) {
+    // the drawer closed on this press, or a popover will on its release
+    const closing =
+      closingPress.current === e.pointerId || document.querySelector(":popover-open") !== null;
+    closingPress.current = null;
     if (e.pointerType === "touch") {
       const touches = touchesRef.current;
       // a palm while the pen draws
@@ -269,30 +354,24 @@ export function Canvas() {
       }
       if (pinchingRef.current) return;
     }
-    // Middle-button drag is the pan gesture, handled by useCanvasView.
-    if (e.button !== 0 || drawingIdRef.current !== null) return;
-    if (tool === "select") {
-      const { x, y } = view.svgToContent(e.clientX, e.clientY);
-      const reach = PICK_PX / view.zoom.peek();
-      setSelected(pickStroke(strokes, x, y, clock.elapsed.peek(), reach, inkOptions));
-      return;
-    }
+    // Middle-button and Space drags pan, handled by useCanvasView.
+    if (e.button !== 0 || drawingIdRef.current !== null || replaying || view.spaceHeld()) return;
     drawingIdRef.current = e.pointerId;
     view.svgRef.current!.setPointerCapture(e.pointerId);
-    // strokes start at the end of the recording, never in the past
-    if (!clock.isRecording) {
-      clock.seek(clock.duration.peek());
-      clock.startRecording(e.timeStamp);
+    pressRef.current = { x: e.clientX, y: e.clientY, t0: e.timeStamp, moved: false, closing };
+    if (tool === "select") {
+      const { x, y } = view.svgToContent(e.clientX, e.clientY);
+      selectRef.current = { x, y, sx: e.clientX, sy: e.clientY, add: e.shiftKey };
+      return;
     }
-
     const pt = view.svgToContent(e.clientX, e.clientY);
-    const now = clock.getElapsedFromTs(e.timeStamp);
-    clock.penDown();
+    const now = eventTime(e);
     // the stroke keeps the view's zoom as the pen goes down
     const stroke: Stroke = {
       points: [{ x: pt.x, y: pt.y, t: now, ...pressure(e) }],
       zoom: view.zoom.peek(),
       style: tool,
+      ...brushes[tool],
     };
     currentStrokeRef.current = stroke;
     strokeInkRef.current = new StrokeInk(stroke, inkOptions);
@@ -305,7 +384,11 @@ export function Canvas() {
       drawLoopRef.current = null;
       return;
     }
-    liveInk.value = ink.at(clock.getElapsed());
+    // held back while it may yet be a closing tap, so the tap doesn't flash a dot
+    const press = pressRef.current;
+    const maybeTap =
+      press !== null && press.closing && !press.moved && performance.now() - press.t0 < TAP_MS;
+    liveInk.value = maybeTap ? null : ink.at(timeNow());
     drawLoopRef.current = requestAnimationFrame(drawFrame);
   }
 
@@ -338,10 +421,24 @@ export function Canvas() {
       return;
     }
     if (touch !== undefined) touches.set(e.pointerId, { ...touch, x: e.clientX, y: e.clientY });
+    if (e.pointerId !== drawingIdRef.current) return;
+    const press = pressRef.current;
+    if (press !== null && Math.hypot(e.clientX - press.x, e.clientY - press.y) > TAP_PX) {
+      press.moved = true;
+    }
+    const sel = selectRef.current;
+    if (sel !== null) {
+      if (marquee.value === null && Math.hypot(e.clientX - sel.sx, e.clientY - sel.sy) <= DRAG_PX) {
+        return;
+      }
+      const pt = view.svgToContent(e.clientX, e.clientY);
+      marquee.value = { x0: sel.x, y0: sel.y, x1: pt.x, y1: pt.y };
+      return;
+    }
     const rec = currentStrokeRef.current;
-    if (rec === null || e.pointerId !== drawingIdRef.current) return;
+    if (rec === null) return;
     const pt = view.svgToContent(e.clientX, e.clientY);
-    rec.points.push({ x: pt.x, y: pt.y, t: clock.getElapsedFromTs(e.timeStamp), ...pressure(e) });
+    rec.points.push({ x: pt.x, y: pt.y, t: eventTime(e), ...pressure(e) });
   }
 
   // midpoint and spread of the first two fingers
@@ -359,7 +456,7 @@ export function Canvas() {
   function handlePointerUp(e: PointerEvent) {
     const touches = touchesRef.current;
     if (!touches.delete(e.pointerId)) {
-      if (e.pointerId === drawingIdRef.current) commitStroke(e);
+      if (e.pointerId === drawingIdRef.current) release(e);
       return;
     }
     if (e.type === "pointercancel") tapRef.current.moved = true;
@@ -374,7 +471,44 @@ export function Canvas() {
     }
     // a finger lifted from three or more: the pair changed
     else if (touches.size >= 2) restartGesture();
-    if (e.pointerId === drawingIdRef.current) commitStroke(e);
+    if (e.pointerId === drawingIdRef.current) release(e);
+  }
+
+  // the same tap as two- and three-finger taps: lifted soon, hardly moved
+  function closingTap(e: PointerEvent): boolean {
+    const press = pressRef.current;
+    return press !== null && press.closing && !press.moved && e.timeStamp - press.t0 < TAP_MS;
+  }
+
+  function release(e: PointerEvent) {
+    if (closingTap(e)) dropStroke();
+    else if (selectRef.current === null) commitStroke(e);
+    else if (e.type === "pointercancel") dropStroke();
+    else finishSelect(e);
+  }
+
+  function finishSelect(e: PointerEvent) {
+    const sel = selectRef.current!;
+    const box = marquee.value;
+    selectRef.current = null;
+    marquee.value = null;
+    drawingIdRef.current = null;
+    pressRef.current = null;
+    if (box !== null) {
+      const hits = strokesInBox(strokes, box);
+      setSelected(sel.add ? [...new Set([...selected, ...hits])].sort((a, b) => a - b) : hits);
+      return;
+    }
+    const { x, y } = view.svgToContent(e.clientX, e.clientY);
+    const hit = pickStroke(strokes, x, y, PICK_PX / view.zoom.peek(), inkOptions);
+    if (!sel.add) setSelected(hit === null ? [] : [hit]);
+    else if (hit !== null) {
+      setSelected(
+        selected.includes(hit)
+          ? selected.filter((i) => i !== hit)
+          : [...selected, hit].sort((a, b) => a - b),
+      );
+    }
   }
 
   function stopDrawing() {
@@ -383,14 +517,21 @@ export function Canvas() {
       drawLoopRef.current = null;
     }
     drawingIdRef.current = null;
+    pressRef.current = null;
   }
 
   function dropStroke() {
+    if (selectRef.current !== null) {
+      selectRef.current = null;
+      marquee.value = null;
+      drawingIdRef.current = null;
+      pressRef.current = null;
+      return;
+    }
     stopDrawing();
     currentStrokeRef.current = null;
     strokeInkRef.current = null;
     liveInk.value = null;
-    clock.penUp();
   }
 
   function commitStroke(e: PointerEvent) {
@@ -398,7 +539,7 @@ export function Canvas() {
     stopDrawing();
     if (rec === null) return;
     // The pen held until release, so the end dwell is recorded.
-    const now = clock.getElapsedFromTs(e.timeStamp);
+    const now = eventTime(e);
     const last = rec.points[rec.points.length - 1];
     rec.points.push({ ...last, t: Math.max(now, last.t) });
     // reuse the finished ink for the committed stroke
@@ -407,35 +548,40 @@ export function Canvas() {
     strokeInkRef.current = null;
     liveInk.value = null;
     store.append(rec);
-    clock.penUp();
   }
 
   const strokes = store.strokes.value;
   const cache = useMemo<InkCache>(() => new WeakMap(), [inkOptions]);
 
   // fixed-size bands, so a replay frame re-renders at most one
-  const bandsRef = useRef<Band[]>([]);
+  const allEnds = replaying ? timing.value.ends : null;
+  const bandsRef = useRef<{ ends: number[] | null; bands: Band[] }>({ ends: null, bands: [] });
   const bands = useMemo(() => {
-    const prev = bandsRef.current;
+    const prev = bandsRef.current.ends === allEnds ? bandsRef.current.bands : [];
     const next: Band[] = [];
     for (let i = 0; i < strokes.length; i += INK_CHUNK) {
       const chunk = strokes.slice(i, i + INK_CHUNK);
       const old = prev[next.length];
-      next.push(
-        old && sameStrokes(old.strokes, chunk)
-          ? old
-          : { strokes: chunk, settled: computed(() => countSettled(chunk, clock.elapsed)) },
-      );
+      if (old && sameStrokes(old.strokes, chunk)) {
+        next.push(old);
+        continue;
+      }
+      const ends = allEnds && allEnds.slice(i, i + INK_CHUNK);
+      next.push({
+        strokes: chunk,
+        ends,
+        settled: computed(() => (ends === null ? chunk.length : countSettled(ends, clock.elapsed))),
+      });
     }
-    bandsRef.current = next;
+    bandsRef.current = { ends: allEnds, bands: next };
     return next;
-  }, [strokes]);
+  }, [strokes, allEnds]);
 
   return (
     <svg
       ref={view.svgRef}
       id="canvas-svg"
-      class={tool === "select" ? "select" : clock.isRecording ? "live" : ""}
+      class={tool === "select" || tool === "replay" ? tool : ""}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -448,17 +594,27 @@ export function Canvas() {
           <InkBand
             key={i}
             strokes={band.strokes}
+            ends={band.ends}
             settled={band.settled}
             elapsed={clock.elapsed}
             inkOptions={inkOptions}
             cache={cache}
           />
         ))}
-        <ActiveInk strokes={strokes} elapsed={clock.elapsed} inkOptions={inkOptions} />
-        <LiveStroke ink={liveInk} />
-        {tool === "select" && selected !== null && selected < strokes.length && (
-          <Inspect stroke={strokes[selected]} elapsed={clock.elapsed} inkOptions={inkOptions} />
+        {replaying && (
+          <ActiveInk
+            strokes={strokes}
+            offsets={timing.value.offsets}
+            elapsed={clock.elapsed}
+            inkOptions={inkOptions}
+          />
         )}
+        <LiveStroke ink={liveInk} />
+        {tool === "select" &&
+          selected
+            .filter((i) => i < strokes.length)
+            .map((i) => <Inspect key={i} stroke={strokes[i]} inkOptions={inkOptions} />)}
+        <Marquee box={marquee} />
       </g>
     </svg>
   );

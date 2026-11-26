@@ -1,6 +1,7 @@
 import {
   type CenterlineFit,
   Ink,
+  INK_DEFAULTS as LIBRARY_DEFAULTS,
   type InkOptions as LibraryInkOptions,
   LineBrush,
   type Paint,
@@ -8,27 +9,40 @@ import {
 } from "rescrawl";
 import type { Stroke } from "./stroke";
 
-export const INK_COLOR = "#1a1a1a";
-
 // bump when a knob's meaning changes: stale knob settings are dropped, strokes are kept
-export const INK_STORAGE_KEY = "rescrawl-ink-7";
+export const INK_STORAGE_KEY = "rescrawl-ink-8";
 
-export type InkOptions = Required<LibraryInkOptions>;
-export { INK_DEFAULTS } from "rescrawl";
+// widths come from each stroke's size; `thinnest`: the brush's narrowest, as a fraction of it
+export type InkOptions = Omit<
+  Required<LibraryInkOptions>,
+  "zoom" | "width" | "minWidth" | "maxWidth"
+> & { thinnest: number };
 
-export type Drawn = { paths: string[]; paint: Paint };
+const { zoom, width, minWidth, maxWidth, ...rest } = LIBRARY_DEFAULTS;
+export const INK_DEFAULTS: InkOptions = { ...rest, thinnest: minWidth / maxWidth };
+
+export type Drawn = { paths: string[]; paint: Paint; color: string };
 
 // fed the stroke's points as their time comes, so a replay draws what the pen drew
 export class StrokeInk {
   private stroke: Stroke;
   private ink: Ink;
   private paint: Paint;
+  private color: string;
   private fed = 0;
   t = -Infinity;
 
   constructor(stroke: Stroke, options: InkOptions) {
     this.stroke = stroke;
-    const o = { ...options, zoom: stroke.zoom };
+    this.color = stroke.color;
+    const { thinnest, ...knobs } = options;
+    const o = {
+      ...knobs,
+      zoom: stroke.zoom,
+      width: stroke.size,
+      maxWidth: stroke.size,
+      minWidth: stroke.size * thinnest,
+    };
     const brush = stroke.style === "pen" ? new LineBrush(o) : new OutlineBrush(o);
     this.paint = brush.paint;
     this.ink = new Ink(brush, o);
@@ -43,12 +57,12 @@ export class StrokeInk {
     const pts = this.stroke.points;
     while (this.fed < pts.length && pts[this.fed].t <= t) this.ink.update(pts[this.fed++]);
     this.t = t;
-    return { paths: this.ink.draw(t).paths, paint: this.paint };
+    return { paths: this.ink.draw(t).paths, paint: this.paint, color: this.color };
   }
 
   whole(): Drawn {
     const pts = this.stroke.points;
     while (this.fed < pts.length) this.ink.update(pts[this.fed++]);
-    return { paths: this.ink.end().paths, paint: this.paint };
+    return { paths: this.ink.end().paths, paint: this.paint, color: this.color };
   }
 }

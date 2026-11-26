@@ -1,26 +1,34 @@
+import type { ReadonlySignal, Signal } from "@preact/signals";
 import { createContext } from "preact";
-import type { Dispatch, StateUpdater } from "preact/hooks";
+import type { Dispatch, MutableRef, StateUpdater } from "preact/hooks";
 import { useContext } from "preact/hooks";
 import type { InkOptions } from "./ink";
 import type { useCanvasView } from "./hooks/useCanvasView";
 import type { Playhead } from "./hooks/usePlayhead";
-import type { StrokeStyle } from "./stroke";
+import type { BrushSettings, ReplayOptions, ReplayTimes, StrokeStyle } from "./stroke";
 
 // the pen and the brush draw new strokes in their style
-export type Tool = StrokeStyle | "select";
+export type Tool = StrokeStyle | "select" | "replay";
 
-export type AppContextValue = {
+type AppContextValue = {
   view: ReturnType<typeof useCanvasView>;
   clock: Playhead;
+  replay: Signal<ReplayOptions>;
+  timing: ReadonlySignal<ReplayTimes>;
   inkOptions: InkOptions;
   setInkOptions: Dispatch<StateUpdater<InkOptions>>;
+  // what the pen and the brush draw new strokes with
+  brushes: Record<StrokeStyle, BrushSettings>;
+  setBrushes: Dispatch<StateUpdater<Record<StrokeStyle, BrushSettings>>>;
   tool: Tool;
   setTool: (tool: Tool) => void;
-  // index of the stroke the select tool picked
-  selected: number | null;
-  setSelected: (index: number | null) => void;
+  // indices of the strokes the select tool picked
+  selected: number[];
+  setSelected: (indices: number[]) => void;
   undo: () => void;
   redo: () => void;
+  // the pointer whose press on the canvas closed the drawer; a tap of it only closes
+  closingPress: MutableRef<number | null>;
 };
 
 export const AppContext = createContext<AppContextValue>(null as unknown as AppContextValue);

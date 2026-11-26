@@ -3,7 +3,7 @@ import { INK_DEFAULTS, type InkOptions } from "../ink";
 
 type NumberKeys<T> = { [K in keyof T]-?: T[K] extends number ? K : never }[keyof T];
 
-type Knob = {
+export type Knob = {
   key: NumberKeys<InkOptions>;
   label: string;
   min: number;
@@ -12,19 +12,6 @@ type Knob = {
 };
 
 const KNOB_SECTIONS: { label: string; knobs: Knob[] }[] = [
-  {
-    label: "Pen",
-    knobs: [{ key: "width", label: "width (screen px)", min: 0.5, max: 20, step: 0.5 }],
-  },
-  {
-    label: "Brush",
-    knobs: [
-      { key: "minWidth", label: "min width (screen px)", min: 1, max: 20, step: 0.5 },
-      { key: "maxWidth", label: "max width (screen px)", min: 1, max: 40, step: 0.5 },
-      { key: "thinSpeed", label: "thin speed (screen px/ms)", min: 0.05, max: 4, step: 0.05 },
-      { key: "widthLag", label: "width lag (ms)", min: 2, max: 300, step: 1 },
-    ],
-  },
   {
     label: "Centerline",
     knobs: [
@@ -47,45 +34,69 @@ const KNOB_SECTIONS: { label: string; knobs: Knob[] }[] = [
   },
 ];
 
+export function Slider({
+  label,
+  min,
+  max,
+  step,
+  value,
+  onInput,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  onInput: (v: number) => void;
+}) {
+  return (
+    <label class="knob">
+      <span>{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onInput={(e) => onInput(+(e.target as HTMLInputElement).value)}
+      />
+      <output>{value}</output>
+    </label>
+  );
+}
+
+// the fit both the pen and the brush draw from
 export function Knobs() {
   const { inkOptions, setInkOptions } = useApp();
+  const keys = KNOB_SECTIONS.flatMap((s) => s.knobs.map((k) => k.key));
   return (
     <div id="knobs">
-      <label class="toggle">
-        <input
-          type="checkbox"
-          checked={inkOptions.pressure === "auto"}
-          onChange={(e) =>
-            setInkOptions((o) => ({
-              ...o,
-              pressure: (e.target as HTMLInputElement).checked ? "auto" : "speed",
-            }))
-          }
-        />
-        pen pressure, where a stylus recorded it
-      </label>
       {KNOB_SECTIONS.map((section) => (
         <section key={section.label}>
           <h2>{section.label}</h2>
           {section.knobs.map((k) => (
-            <label class="knob" key={k.key}>
-              <span>{k.label}</span>
-              <input
-                type="range"
-                min={k.min}
-                max={k.max}
-                step={k.step}
-                value={inkOptions[k.key]}
-                onInput={(e) =>
-                  setInkOptions((o) => ({ ...o, [k.key]: +(e.target as HTMLInputElement).value }))
-                }
-              />
-              <output>{inkOptions[k.key]}</output>
-            </label>
+            <Slider
+              key={k.key}
+              label={k.label}
+              min={k.min}
+              max={k.max}
+              step={k.step}
+              value={inkOptions[k.key]}
+              onInput={(v) => setInkOptions((o) => ({ ...o, [k.key]: v }))}
+            />
           ))}
         </section>
       ))}
-      <button onClick={() => setInkOptions({ ...INK_DEFAULTS })}>Reset to defaults</button>
+      <button
+        onClick={() =>
+          setInkOptions((o) => ({
+            ...o,
+            ...Object.fromEntries(keys.map((k) => [k, INK_DEFAULTS[k]])),
+          }))
+        }
+      >
+        Reset to defaults
+      </button>
     </div>
   );
 }

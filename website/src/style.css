@@ -1,3 +1,10 @@
+/* clear of a notch, rounded corners and the home indicator; viewport-fit=cover lets content under them */
+:root {
+  --inset-top: max(12px, env(safe-area-inset-top, 0px));
+  --inset-left: max(12px, env(safe-area-inset-left, 0px));
+  --inset-right: max(12px, env(safe-area-inset-right, 0px));
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -5,69 +12,42 @@
 }
 
 body {
-  height: 100vh;
-  /* the visible viewport, so mobile browser bars don't cover the timeline */
+  /* the visible viewport, so mobile browser bars don't cover the tray */
   height: 100dvh;
   overflow: hidden;
   /* no long-press text selection or callout; no double-tap zoom */
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+  /* no gray box over a tapped control on iOS; each shows its own press, below */
+  -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
-  font-family: sans-serif;
+  font-family: system-ui, sans-serif;
   background: #1a1a1a;
+  /* inherited by every range, checkbox and color control */
+  accent-color: #4f8ef7;
 }
 
 #app {
-  display: flex;
-  flex-direction: column;
   height: 100%;
 }
 
 #canvas-wrapper {
   position: relative;
-  flex: 1;
-  min-height: 0;
+  height: 100%;
   /* on an HTML element too: Safari has not always honoured it on <svg> */
   touch-action: none;
+  --inset-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 #floating-toolbar {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: var(--inset-top);
+  left: var(--inset-left);
   display: flex;
   gap: 6px;
   z-index: 10;
   pointer-events: none;
-}
-
-#zoom-control {
-  position: absolute;
-  bottom: 12px;
-  right: 12px;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.55);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-}
-#zoom-control input[type="range"] {
-  width: 110px;
-  accent-color: #4f8ef7;
-  cursor: pointer;
-}
-#zoom-control .zoom-level {
-  min-width: 38px;
-  text-align: right;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: #ddd;
-  cursor: pointer;
-  user-select: none;
 }
 
 #canvas-svg {
@@ -86,22 +66,21 @@ body {
   pointer-events: none;
 }
 
-#canvas-svg.select {
+#canvas-svg.select,
+#canvas-svg.replay {
   cursor: default;
 }
-
-/* Live recording: red crosshair cursor */
-#canvas-svg.live {
-  cursor:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cline x1='12' y1='1' x2='12' y2='23' stroke='%23ef4444' stroke-width='2'/%3E%3Cline x1='1' y1='12' x2='23' y2='12' stroke='%23ef4444' stroke-width='2'/%3E%3Ccircle cx='12' cy='12' r='2.5' fill='%23ef4444'/%3E%3C/svg%3E")
-      12 12,
-    crosshair;
+#canvas-svg[data-hand="grab"] {
+  cursor: grab;
+}
+#canvas-svg[data-hand="grabbing"] {
+  cursor: grabbing;
 }
 
 #knobs {
   position: absolute;
-  top: 52px;
-  left: 12px;
+  top: calc(var(--inset-top) + 44px);
+  left: var(--inset-left);
   z-index: 10;
   width: 280px;
   max-height: calc(100% - 104px);
@@ -117,9 +96,40 @@ body {
   font-size: 11px;
   scrollbar-width: thin;
   scrollbar-color: #444 transparent;
-}
-#knobs {
   touch-action: pan-y;
+}
+.swatch {
+  position: relative;
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+}
+.swatch.custom {
+  background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red);
+}
+.swatch.mixed {
+  box-shadow:
+    inset 0 0 0 2px #222,
+    inset 0 0 0 4px #4f8ef7;
+}
+.swatch.small {
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+  cursor: default;
+}
+/* the native picker opens from a click on its label; it need not show */
+.swatch input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
 }
 #knobs section {
   display: flex;
@@ -129,7 +139,7 @@ body {
 #knobs h2 {
   font-size: 11px;
   font-weight: 600;
-  color: #666;
+  color: #8a8a8a;
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -144,7 +154,6 @@ body {
 .knob input {
   flex: 1;
   min-width: 0;
-  accent-color: #4f8ef7;
 }
 .knob output {
   flex: 0 0 36px;
@@ -158,9 +167,6 @@ body {
   gap: 6px;
   cursor: pointer;
 }
-.toggle input {
-  accent-color: #4f8ef7;
-}
 #knobs button {
   background: #555;
   color: #fff;
@@ -173,10 +179,6 @@ button {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.1s;
-}
-button:hover {
-  opacity: 0.85;
 }
 button:disabled {
   opacity: 0.4;
@@ -185,76 +187,406 @@ button:disabled {
 
 #floating-toolbar button {
   pointer-events: auto;
-  background: #333;
-  color: #ccc;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
-  padding: 6px 8px;
+  height: 36px;
+  min-width: 36px;
+  padding: 0 9px;
   display: flex;
   align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #ececec;
+  color: #333;
 }
-#floating-toolbar #btn-clear {
-  color: #f87171;
+/* touch screens keep :hover after a tap */
+@media (hover: hover) {
+  #floating-toolbar button:not(:disabled):hover {
+    background: #dedede;
+  }
+}
+/* a faded button would fade half a shared pill; only the icon grays */
+#floating-toolbar button:disabled {
+  opacity: 1;
+  color: #b4b4b4;
+}
+/* buttons that belong together share one pill */
+#floating-toolbar .group {
+  display: flex;
+}
+#floating-toolbar .group > button:not(:first-child) {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+#floating-toolbar .group > button:not(:last-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  /* a hairline between them */
+  box-shadow: inset -1px 0 0 #d6d6d6;
+}
+#floating-toolbar #btn-zoom {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+}
+#zoom-menu {
+  /* the toolbar lets clicks through to the canvas; the menu must not */
+  pointer-events: auto;
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  border: none;
+  padding: 4px;
+  border-radius: 8px;
+  /* gray, not a shadow, sets it off the white canvas */
+  background: #ececec;
+}
+/* only while open, or it beats the browser's display: none for a closed popover */
+#zoom-menu:popover-open {
+  display: flex;
+  flex-direction: column;
+}
+#zoom-menu button {
+  display: block;
+  height: auto;
+  padding: 8px 12px;
+  text-align: left;
+  font-weight: normal;
+  background: none;
+  color: #333;
+  border-radius: 4px;
+}
+@media (hover: hover) {
+  #zoom-menu button:not(:disabled):hover {
+    background: #dedede;
+  }
+}
+/* pressed, on touch screens too; a tool shows its press by lifting */
+button:not(:disabled, .tool):active,
+.swatch:active {
+  filter: brightness(0.9);
+}
+.pager:not(:disabled):active {
+  background: #dedede;
 }
 #floating-toolbar #btn-knobs.on {
   background: #4f8ef7;
   color: #fff;
 }
 
-#tray {
+/* timeline, then the tray row, then the drawer beneath; only what is drawn takes clicks */
+#tray-wrap {
   position: absolute;
   bottom: 0;
   left: 50%;
   transform: translateX(-50%);
   z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+#tray-wrap > * {
+  pointer-events: auto;
+}
+#base {
+  display: flex;
+  flex-direction: column;
+}
+#dock {
+  display: flex;
+}
+#tray {
+  position: relative;
   height: 40px;
   padding: 0 18px;
   display: flex;
   align-items: flex-end;
   gap: 10px;
-  border-radius: 14px 14px 0 0;
-  background: linear-gradient(#4a3f35, #2a231d 60%, #1c1814);
-  box-shadow:
-    inset 0 2px 0 rgba(255, 255, 255, 0.12),
-    0 -2px 10px rgba(0, 0, 0, 0.35);
+  /* the toggle joins on its right */
+  border-radius: 14px 0 0 0;
+  background: #ececec;
   /* tools sink below the tray's lip; only their tops show */
   clip-path: inset(-200px -1000px 0 -1000px);
 }
+/* the drawer's edge shades the bottom of the tools, as though they sit in a pocket */
+#tray::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 6px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.08));
+  pointer-events: none;
+}
+#drawer-toggle {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0 14px 0 0;
+  /* the tray's own color, so the two read as one bar */
+  background: #ececec;
+  box-shadow: inset 1px 0 0 rgba(0, 0, 0, 0.08);
+  color: #333;
+}
+@media (hover: hover) {
+  #drawer-toggle:hover {
+    background: #dedede;
+  }
+}
+#drawer-toggle svg {
+  transform: rotate(180deg);
+  transition: transform 0.25s ease;
+}
+#drawer-toggle[aria-expanded="true"] svg {
+  transform: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  #drawer-toggle svg {
+    transition: none;
+  }
+}
+/* under the tray and its toggle */
+#drawer {
+  /* as wide as the tray above; its sliders' own widths don't count */
+  contain: inline-size;
+  /* a share of the screen, within reason: short landscape phones to tall desktops */
+  --drawer-height: clamp(160px, 30dvh, 320px);
+  padding-bottom: var(--inset-bottom);
+  background: #ececec;
+}
+/* the content's own height, so the drawer and what's in it grow together */
+#drawer .drawer-inner {
+  height: 0;
+  overflow: hidden;
+  transition: height 0.2s ease-out;
+}
+#drawer.open .drawer-inner {
+  height: var(--drawer-height);
+}
+/* following a press on a tool */
+#drawer.dragging .drawer-inner {
+  transition: none;
+}
+/* the same height for every tool, so the tray doesn't move between them */
+#drawer .drawer-content {
+  height: var(--drawer-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #c4c4c4 transparent;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #333;
+  font-size: 11px;
+}
+#drawer .note {
+  line-height: 1.4;
+}
+/* the label and value above, the slider the full width beneath */
+#drawer .knob {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  row-gap: 4px;
+}
+#drawer .knob input {
+  grid-row: 2;
+  grid-column: 1 / -1;
+}
+#drawer .knob output {
+  grid-row: 1;
+  grid-column: 2;
+  color: #333;
+  font-variant-numeric: tabular-nums;
+}
+/* a wide track with a flat bar of a thumb inset 3px all round, so their corners are
+   concentric: the track's radius is the thumb's plus the inset */
+#drawer input[type="range"] {
+  appearance: none;
+  height: 32px;
+  margin: 0;
+  padding: 3px;
+  border-radius: 8px;
+  background: #d4d4d4;
+  outline: none;
+  cursor: pointer;
+}
+/* flat: some browsers shade a thumb by default */
+#drawer input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 28px;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: none;
+}
+#drawer input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 28px;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: none;
+}
+#drawer input[type="range"]::-moz-range-track {
+  background: none;
+}
+/* no ring; keyboard focus shows on the thumb */
+#drawer input[type="range"]:focus-visible::-webkit-slider-thumb {
+  background: #4f8ef7;
+}
+#drawer input[type="range"]:focus-visible::-moz-range-thumb {
+  background: #4f8ef7;
+}
+/* room for the picked one's ring */
+#drawer .swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px;
+}
+#drawer .swatch {
+  width: 32px;
+  height: 32px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+/* a gap the drawer's gray, then a dark ring */
+#drawer .swatch.on {
+  box-shadow:
+    0 0 0 2px #ececec,
+    0 0 0 4px #333;
+}
+#drawer .drawer-content > button {
+  align-self: flex-start;
+  background: #dedede;
+  color: #333;
+}
+@media (hover: hover) {
+  #drawer .drawer-content > button:hover {
+    background: #d4d4d4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #drawer .drawer-inner {
+    transition: none;
+  }
+}
+/* a page's worth of tools when they don't all fit: the tray spans the screen, and its ends,
+   flush with its corners, page through them */
+#tray-wrap.paged {
+  left: 0;
+  right: 0;
+  transform: none;
+}
+#tray-wrap.paged #base {
+  align-self: stretch;
+}
+#tray-wrap.paged #tray {
+  flex: 1;
+  padding: 0;
+  justify-content: space-between;
+}
+.pager {
+  align-self: stretch;
+  width: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0;
+  background: none;
+  color: #333;
+}
+.pager:first-child {
+  border-radius: 14px 0 0 0;
+}
+@media (hover: hover) {
+  .pager:not(:disabled):hover {
+    background: #dedede;
+  }
+}
+.tool-slot {
+  flex: none;
+  width: 40px;
+}
 .tool {
+  /* a vertical drag moves the drawer, not the page */
+  touch-action: none;
   padding: 0;
   background: none;
   line-height: 0;
-  transform: translateY(70px);
+  /* each lift is 6px more for the art's headroom, Tools.tsx's HEADROOM */
+  transform: translateY(76px);
   transition: transform 0.18s ease-out;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.5));
 }
 @media (hover: hover) {
   .tool:hover {
-    opacity: 1;
-    transform: translateY(62px);
+    transform: translateY(68px);
   }
 }
 .tool.on {
-  transform: translateY(28px);
+  transform: translateY(34px);
 }
 
 #selection {
   position: absolute;
-  left: calc(100% + 12px);
-  bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  white-space: nowrap;
+  top: var(--inset-top);
+  right: var(--inset-right);
+  z-index: 10;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 64px);
+  overflow: auto;
+  padding: 6px 8px;
   border-radius: 8px;
   background: rgba(34, 34, 34, 0.92);
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
   font-size: 12px;
   color: #999;
   font-variant-numeric: tabular-nums;
+  touch-action: pan-x pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: #444 transparent;
+}
+#selection table {
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+#selection th,
+#selection td {
+  padding: 2px 6px;
+  text-align: right;
+}
+#selection th:first-child,
+#selection td:first-child {
+  text-align: left;
+}
+#selection .overview th {
+  padding-bottom: 4px;
+  color: #ddd;
+  font-weight: 600;
+}
+#selection .labels th {
+  font-weight: normal;
+  font-size: 10px;
+  color: #8a8a8a;
+  border-bottom: 1px solid #3a3a3a;
+}
+#selection tbody tr:first-child td {
+  padding-top: 4px;
+}
+#selection .styles {
+  display: inline-flex;
+  gap: 2px;
 }
 #selection button {
-  padding: 3px 8px;
+  padding: 2px 7px;
+  font-size: 11px;
   background: #333;
   color: #ccc;
 }
@@ -262,78 +594,116 @@ button:disabled {
   background: #4f8ef7;
   color: #fff;
 }
+#selection button.some {
+  box-shadow: inset 0 -2px 0 #4f8ef7;
+}
+#selection .size-input {
+  width: 52px;
+  padding: 2px 4px;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: #ddd;
+  font: inherit;
+  text-align: right;
+}
+#selection button.index {
+  padding: 0;
+  background: none;
+  color: #ccc;
+  font-weight: normal;
+}
 
+/* an island above the tray, clear of the lifted tool */
 #timeline {
+  width: min(420px, calc(100vw - 24px));
+  height: 40px;
+  margin-bottom: 64px;
+  padding: 0 14px 0 8px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  height: calc(22px + env(safe-area-inset-bottom, 0px));
-  padding: 0 8px env(safe-area-inset-bottom, 0px);
-  background: #1c1c1c;
+  gap: 6px;
+  border-radius: 20px;
+  background: #ececec;
 }
 #btn-play {
+  flex: none;
   padding: 0;
-  width: 16px;
-  height: 16px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 50%;
   background: none;
-  color: #ccc;
+  color: #333;
 }
-#timeline .track {
-  position: relative;
+/* a video's timeline: a thin borderless track, filled up to a round playhead.
+   Chrome and Safari fill from --played; Firefox has its own part for it */
+#timeline .scrub {
+  appearance: none;
   flex: 1;
-  height: 22px;
+  min-width: 0;
+  height: 28px;
+  margin: 0;
+  background: none;
+  outline: none;
   cursor: pointer;
-  touch-action: none;
 }
-#timeline .track::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 3px;
-  margin-top: -1.5px;
+#timeline .scrub::-webkit-slider-runnable-track {
+  height: 4px;
   border-radius: 2px;
-  background: #3a3a3a;
+  background: linear-gradient(to right, #4f8ef7 var(--played), #d4d4d4 var(--played));
 }
-#timeline .played {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  height: 3px;
-  margin-top: -1.5px;
+#timeline .scrub::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  /* centered on the 4px track */
+  margin-top: -5px;
+  border: none;
+  border-radius: 50%;
+  background: #4f8ef7;
+}
+#timeline .scrub::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #d4d4d4;
+}
+#timeline .scrub::-moz-range-progress {
+  height: 4px;
   border-radius: 2px;
   background: #4f8ef7;
-  pointer-events: none;
 }
-#timeline .head {
-  position: absolute;
-  top: 50%;
-  width: 9px;
-  height: 9px;
-  margin: -4.5px 0 0 -4.5px;
+#timeline .scrub::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
   border-radius: 50%;
-  background: #fff;
-  pointer-events: none;
+  background: #4f8ef7;
 }
-#timeline.live .played {
-  background: #ef4444;
+/* no ring; keyboard focus darkens the playhead */
+#timeline .scrub:focus-visible::-webkit-slider-thumb {
+  background: #2563c9;
 }
-#timeline.live .head {
-  background: #ef4444;
+#timeline .scrub:focus-visible::-moz-range-thumb {
+  background: #2563c9;
 }
-#timeline.live .track {
+#timeline .scrub:disabled {
   cursor: default;
 }
 
-/* beside the tray runs off a phone's screen: above the lifted tool instead */
-@media (max-width: 700px) {
+/* the toolbar takes the top-left corner of a phone; the panel starts below it */
+@media (max-width: 640px) {
   #selection {
-    left: 50%;
-    bottom: 100px;
-    transform: translateX(-50%);
+    top: calc(var(--inset-top) + 44px);
+    max-height: calc(100% - 200px);
+  }
+}
+
+/* iOS zooms the page into a focused field set smaller than 16px */
+@media (pointer: coarse) {
+  #selection .size-input {
+    font-size: 16px;
   }
 }

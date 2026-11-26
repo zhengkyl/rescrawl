@@ -1,69 +1,96 @@
-import { batch } from "@preact/signals";
-import { useEffect, useState } from "preact/hooks";
+import { batch, useComputed, useSignal, useSignalEffect } from "@preact/signals";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { AppContext, type Tool } from "../context";
 import type { InkOptions } from "../ink";
 import { INK_DEFAULTS, INK_STORAGE_KEY } from "../ink";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { usePlayhead } from "../hooks/usePlayhead";
+import {
+  BRUSH_DEFAULTS,
+  BRUSHES_STORAGE_KEY,
+  type BrushSettings,
+  REPLAY_DEFAULTS,
+  REPLAY_STORAGE_KEY,
+  type ReplayOptions,
+  replayTimes,
+  type StrokeStyle,
+} from "../stroke";
+import { load, save } from "../storage";
 import { applyStrokeOp, useStrokes } from "../strokeStore";
 import { Canvas } from "./Canvas";
 import { Knobs } from "./Knobs";
-import { Timeline } from "./Timeline";
+import { Selection } from "./Selection";
 import { Actions } from "./Actions";
 import { Tools } from "./Tools";
-import { ZoomControl } from "./ZoomControl";
+
+const TYPING =
+  'input:not([type="range"], [type="checkbox"], [type="color"]), textarea, [contenteditable]';
 
 export function Workspace() {
   const store = useStrokes();
-  const clock = usePlayhead();
   const view = useCanvasView();
+  const replay = useSignal<ReplayOptions>(load(REPLAY_STORAGE_KEY, REPLAY_DEFAULTS));
+  const timing = useComputed(() => replayTimes(store.strokes.value, replay.value.maxPause));
+  const clock = usePlayhead(useComputed(() => timing.value.duration));
+  useSignalEffect(() => save(REPLAY_STORAGE_KEY, replay.value));
 
-  const [inkOptions, setInkOptions] = useState<InkOptions>(() => ({
-    ...INK_DEFAULTS,
-    ...JSON.parse(localStorage.getItem(INK_STORAGE_KEY) || "{}"),
-  }));
+  const [inkOptions, setInkOptions] = useState<InkOptions>(() =>
+    load(INK_STORAGE_KEY, INK_DEFAULTS),
+  );
+  const [brushes, setBrushes] = useState<Record<StrokeStyle, BrushSettings>>(() => {
+    const saved = load(BRUSHES_STORAGE_KEY, BRUSH_DEFAULTS);
+    return {
+      pen: { ...BRUSH_DEFAULTS.pen, ...saved.pen },
+      brush: { ...BRUSH_DEFAULTS.brush, ...saved.brush },
+    };
+  });
   const [knobsOpen, setKnobsOpen] = useState(false);
   const [tool, setToolState] = useState<Tool>("brush");
-  const [selected, setSelected] = useState<number | null>(null);
+  const [selected, setSelected] = useState<number[]>([]);
+  const closingPress = useRef<number | null>(null);
   function setTool(next: Tool) {
     setToolState(next);
-    setSelected(null);
+    setSelected([]);
+    // replay opens on the whole drawing
+    if (next === "replay") clock.seek(clock.duration.peek());
+    else clock.pause();
   }
 
-  useEffect(() => {
-    localStorage.setItem(INK_STORAGE_KEY, JSON.stringify(inkOptions));
-  }, [inkOptions]);
+  useEffect(() => save(INK_STORAGE_KEY, inkOptions), [inkOptions]);
+  useEffect(() => save(BRUSHES_STORAGE_KEY, brushes), [brushes]);
 
   function undo() {
     if (store.historyIndex.value < 0) return;
-    const entry = store.historyStack.value[store.historyIndex.value];
+    const op = store.historyStack.value[store.historyIndex.value];
     batch(() => {
-      store.strokes.value = applyStrokeOp(store.strokes.value, entry.op, "undo");
+      store.strokes.value = applyStrokeOp(store.strokes.value, op, "undo");
       store.historyIndex.value--;
     });
-    if (entry.prevFocus !== null) clock.seek(entry.prevFocus);
   }
   function redo() {
     if (store.historyIndex.value >= store.historyStack.value.length - 1) return;
-    const entry = store.historyStack.value[store.historyIndex.value + 1];
+    const op = store.historyStack.value[store.historyIndex.value + 1];
     batch(() => {
-      store.strokes.value = applyStrokeOp(store.strokes.value, entry.op, "redo");
+      store.strokes.value = applyStrokeOp(store.strokes.value, op, "redo");
       store.historyIndex.value++;
     });
-    if (entry.nextFocus !== null) clock.seek(entry.nextFocus);
   }
+  // one undo step brings it all back
   function clear() {
-    if (!confirm("Clear all strokes?")) return;
-    clock.seek(0);
     store.replace([]);
   }
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.ctrlKey && !e.shiftKey && e.key === "z") {
+      // a text field keeps its own undo
+      if ((e.target as Element).closest?.(TYPING)) return;
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      // caps lock or shift makes it "Z"
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
         e.preventDefault();
         undo();
-      } else if (e.ctrlKey && (e.key === "y" || (e.shiftKey && e.key === "Z"))) {
+      } else if (key === "y" || (key === "z" && e.shiftKey)) {
         e.preventDefault();
         redo();
       }
@@ -77,14 +104,19 @@ export function Workspace() {
       value={{
         view,
         clock,
+        replay,
+        timing,
         inkOptions,
         setInkOptions,
+        brushes,
+        setBrushes,
         tool,
         setTool,
         selected,
         setSelected,
         undo,
         redo,
+        closingPress,
       }}
     >
       <div id="canvas-wrapper">
@@ -97,10 +129,9 @@ export function Workspace() {
         />
         <Canvas />
         <Tools />
+        <Selection />
         {knobsOpen && <Knobs />}
-        <ZoomControl />
       </div>
-      <Timeline />
     </AppContext.Provider>
   );
 }
