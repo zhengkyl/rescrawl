@@ -5,6 +5,7 @@ import { useContext } from "preact/hooks";
 import type { InkOptions } from "./ink";
 import type { useCanvasView } from "./hooks/useCanvasView";
 import type { Playhead } from "./hooks/usePlayhead";
+import type { Prefs } from "./prefs";
 import type { BrushSettings, ReplayOptions, ReplayTimes, StrokeStyle } from "./stroke";
 
 // the pen and the brush draw new strokes in their style
@@ -14,12 +15,15 @@ type AppContextValue = {
   view: ReturnType<typeof useCanvasView>;
   clock: Playhead;
   replay: Signal<ReplayOptions>;
+  prefs: Signal<Prefs>;
   timing: ReadonlySignal<ReplayTimes>;
   inkOptions: InkOptions;
   setInkOptions: Dispatch<StateUpdater<InkOptions>>;
   // what the pen and the brush draw new strokes with
   brushes: Record<StrokeStyle, BrushSettings>;
   setBrushes: Dispatch<StateUpdater<Record<StrokeStyle, BrushSettings>>>;
+  // the tool whose size is being adjusted, shown at the canvas's center
+  sizePreview: Signal<StrokeStyle | null>;
   tool: Tool;
   setTool: (tool: Tool) => void;
   // indices of the strokes the select tool picked

@@ -1,3 +1,4 @@
+import { useRef } from "preact/hooks";
 import { useApp } from "../context";
 import type { BrushSettings, StrokeStyle } from "../stroke";
 import { Slider } from "./Knobs";
@@ -13,6 +14,8 @@ const COLORS = [
   { hex: "#8e4ec6", name: "Purple" },
 ];
 
+const PREVIEW_MS = 600; // the size preview lingers this long after the last change
+
 export const SIZE_RANGE: Record<StrokeStyle, { min: number; max: number; step: number }> = {
   pen: { min: 0.5, max: 20, step: 0.5 },
   brush: { min: 1, max: 60, step: 1 },
@@ -20,14 +23,21 @@ export const SIZE_RANGE: Record<StrokeStyle, { min: number; max: number; step: n
 
 // the size and color of a drawing tool, at the top of its drawer
 export function BrushControls({ style }: { style: StrokeStyle }) {
-  const { brushes, setBrushes } = useApp();
+  const { brushes, setBrushes, sizePreview } = useApp();
   const { size, color } = brushes[style];
   const set = (patch: Partial<BrushSettings>) =>
     setBrushes((b) => ({ ...b, [style]: { ...b[style], ...patch } }));
+  const previewTimer = useRef<number | undefined>(undefined);
+  function setSize(v: number) {
+    set({ size: v });
+    sizePreview.value = style;
+    clearTimeout(previewTimer.current);
+    previewTimer.current = setTimeout(() => (sizePreview.value = null), PREVIEW_MS);
+  }
   const custom = !COLORS.some((c) => c.hex === color);
   return (
     <>
-      <Slider label="size" {...SIZE_RANGE[style]} value={size} onInput={(v) => set({ size: v })} />
+      <Slider label="size" {...SIZE_RANGE[style]} value={size} onInput={setSize} />
       <div class="swatches" role="group" aria-label="Color">
         {COLORS.map((c) => (
           <button

@@ -1,4 +1,5 @@
 import { useStrokes } from "../strokeStore";
+import { SettingsMenu } from "./SettingsMenu";
 import { ZoomControl } from "./ZoomControl";
 
 const IS_MAC = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
@@ -24,6 +25,7 @@ export function Actions({
 
   return (
     <div id="floating-toolbar">
+      <SettingsMenu />
       <div class="group" role="group" aria-label="History">
         <button
           id="btn-undo"

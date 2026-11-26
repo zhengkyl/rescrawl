@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { AppContext, type Tool } from "../context";
 import type { InkOptions } from "../ink";
 import { INK_DEFAULTS, INK_STORAGE_KEY } from "../ink";
+import { type Prefs, PREFS_DEFAULTS, PREFS_STORAGE_KEY } from "../prefs";
 import { useCanvasView } from "../hooks/useCanvasView";
 import { usePlayhead } from "../hooks/usePlayhead";
 import {
@@ -33,6 +34,8 @@ export function Workspace() {
   const timing = useComputed(() => replayTimes(store.strokes.value, replay.value.maxPause));
   const clock = usePlayhead(useComputed(() => timing.value.duration));
   useSignalEffect(() => save(REPLAY_STORAGE_KEY, replay.value));
+  const prefs = useSignal<Prefs>(load(PREFS_STORAGE_KEY, PREFS_DEFAULTS));
+  useSignalEffect(() => save(PREFS_STORAGE_KEY, prefs.value));
 
   const [inkOptions, setInkOptions] = useState<InkOptions>(() =>
     load(INK_STORAGE_KEY, INK_DEFAULTS),
@@ -44,6 +47,7 @@ export function Workspace() {
       brush: { ...BRUSH_DEFAULTS.brush, ...saved.brush },
     };
   });
+  const sizePreview = useSignal<StrokeStyle | null>(null);
   const [knobsOpen, setKnobsOpen] = useState(false);
   const [tool, setToolState] = useState<Tool>("brush");
   const [selected, setSelected] = useState<number[]>([]);
@@ -105,11 +109,13 @@ export function Workspace() {
         view,
         clock,
         replay,
+        prefs,
         timing,
         inkOptions,
         setInkOptions,
         brushes,
         setBrushes,
+        sizePreview,
         tool,
         setTool,
         selected,

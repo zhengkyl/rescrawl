@@ -50,7 +50,7 @@ export function ZoomControl() {
         <button disabled={strokes.length === 0} onClick={then(view.fitToView)}>
           Zoom to fit
         </button>
-        <button onClick={then(() => view.zoomTo(1))}>Reset zoom</button>
+        <button onClick={then(() => view.zoomTo(1))}>Zoom to 100%</button>
       </div>
     </>
   );

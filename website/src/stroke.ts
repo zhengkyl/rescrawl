@@ -3,8 +3,8 @@
 export type Point = { x: number; y: number; t: number; p?: number };
 export type StrokeStyle = "pen" | "brush";
 // at least one point, so [0] and [length - 1] are safe
-// `zoom`: screen px per drawing px while drawn; zooming the view moves nothing drawn
-// `size`: the pen's width or the brush's widest, in screen px at `zoom`
+// `zoom`: screen px per drawing px while drawn, which sets how closely the fit follows the hand
+// `size`: the pen's width or the brush's widest, in drawing px
 export type Stroke = {
   points: Point[];
   zoom: number;

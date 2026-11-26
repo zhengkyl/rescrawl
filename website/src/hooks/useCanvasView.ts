@@ -274,6 +274,8 @@ export function useCanvasView() {
     fitToView,
     fitStrokes,
     svgToContent,
+    panX,
+    panY,
     zoom,
     zoomTo,
     zoomAt,

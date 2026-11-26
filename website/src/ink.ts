@@ -36,12 +36,14 @@ export class StrokeInk {
     this.stroke = stroke;
     this.color = stroke.color;
     const { thinnest, ...knobs } = options;
+    // the library's lengths are screen px at the stroke's zoom
+    const width = stroke.size * stroke.zoom;
     const o = {
       ...knobs,
       zoom: stroke.zoom,
-      width: stroke.size,
-      maxWidth: stroke.size,
-      minWidth: stroke.size * thinnest,
+      width,
+      maxWidth: width,
+      minWidth: width * thinnest,
     };
     const brush = stroke.style === "pen" ? new LineBrush(o) : new OutlineBrush(o);
     this.paint = brush.paint;

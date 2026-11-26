@@ -70,6 +70,10 @@ body {
 #canvas-svg.replay {
   cursor: default;
 }
+/* the brush outline alone marks the pen; a pan still shows its hand */
+#canvas-svg.no-crosshair {
+  cursor: none;
+}
 #canvas-svg[data-hand="grab"] {
   cursor: grab;
 }
@@ -387,17 +391,20 @@ button:not(:disabled, .tool):active,
 #drawer .note {
   line-height: 1.4;
 }
-/* the label and value above, the slider the full width beneath */
-#drawer .knob {
+/* the label and value above, the slider the full width beneath; the settings menu's too */
+#drawer .knob,
+#settings-menu .knob {
   display: grid;
   grid-template-columns: 1fr auto;
   row-gap: 4px;
 }
-#drawer .knob input {
+#drawer .knob input,
+#settings-menu .knob input {
   grid-row: 2;
   grid-column: 1 / -1;
 }
-#drawer .knob output {
+#drawer .knob output,
+#settings-menu .knob output {
   grid-row: 1;
   grid-column: 2;
   color: #333;
@@ -405,7 +412,8 @@ button:not(:disabled, .tool):active,
 }
 /* a wide track with a flat bar of a thumb inset 3px all round, so their corners are
    concentric: the track's radius is the thumb's plus the inset */
-#drawer input[type="range"] {
+#drawer input[type="range"],
+#settings-menu input[type="range"] {
   appearance: none;
   height: 32px;
   margin: 0;
@@ -416,7 +424,8 @@ button:not(:disabled, .tool):active,
   cursor: pointer;
 }
 /* flat: some browsers shade a thumb by default */
-#drawer input[type="range"]::-webkit-slider-thumb {
+#drawer input[type="range"]::-webkit-slider-thumb,
+#settings-menu input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   width: 18px;
   height: 28px;
@@ -425,7 +434,8 @@ button:not(:disabled, .tool):active,
   background: #fff;
   box-shadow: none;
 }
-#drawer input[type="range"]::-moz-range-thumb {
+#drawer input[type="range"]::-moz-range-thumb,
+#settings-menu input[type="range"]::-moz-range-thumb {
   width: 18px;
   height: 28px;
   border: none;
@@ -433,14 +443,17 @@ button:not(:disabled, .tool):active,
   background: #fff;
   box-shadow: none;
 }
-#drawer input[type="range"]::-moz-range-track {
+#drawer input[type="range"]::-moz-range-track,
+#settings-menu input[type="range"]::-moz-range-track {
   background: none;
 }
 /* no ring; keyboard focus shows on the thumb */
-#drawer input[type="range"]:focus-visible::-webkit-slider-thumb {
+#drawer input[type="range"]:focus-visible::-webkit-slider-thumb,
+#settings-menu input[type="range"]:focus-visible::-webkit-slider-thumb {
   background: #4f8ef7;
 }
-#drawer input[type="range"]:focus-visible::-moz-range-thumb {
+#drawer input[type="range"]:focus-visible::-moz-range-thumb,
+#settings-menu input[type="range"]:focus-visible::-moz-range-thumb {
   background: #4f8ef7;
 }
 /* room for the picked one's ring */
@@ -706,4 +719,71 @@ button:not(:disabled, .tool):active,
   #selection .size-input {
     font-size: 16px;
   }
+}
+
+/* like the zoom menu: in the toolbar, so its buttons outrank the toolbar's */
+#settings-menu {
+  pointer-events: auto;
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  border: none;
+  padding: 10px;
+  border-radius: 8px;
+  background: #ececec;
+  color: #333;
+}
+#settings-menu:popover-open {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+#settings-menu h2 {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6a6a6a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+#settings-menu .previews {
+  display: flex;
+  gap: 6px;
+}
+#settings-menu .preview {
+  height: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border-radius: 10px;
+  background: none;
+  font-size: 11px;
+  font-weight: normal;
+}
+@media (hover: hover) {
+  #settings-menu .preview:not(:disabled):hover {
+    background: #dedede;
+  }
+}
+/* a patch of the canvas */
+#settings-menu .preview svg {
+  display: block;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+/* the swatches' mark: a gap the menu's gray, then a dark ring */
+#settings-menu .preview.on svg {
+  box-shadow:
+    0 0 0 2px #ececec,
+    0 0 0 4px #333;
+}
+#settings-menu section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#settings-menu .knob {
+  font-size: 11px;
 }

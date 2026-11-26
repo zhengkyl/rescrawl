@@ -1,12 +1,12 @@
 import type { ReadonlySignal, Signal } from "@preact/signals";
-import { computed, useSignal } from "@preact/signals";
+import { computed, useSignal, useSignalEffect } from "@preact/signals";
 import { useEffect, useMemo, useRef } from "preact/hooks";
 import { fitPath } from "rescrawl";
 import { useApp } from "../context";
 import type { Drawn, InkOptions } from "../ink";
 import { StrokeInk } from "../ink";
 import { useStrokes } from "../strokeStore";
-import type { Point, Stroke } from "../stroke";
+import type { BrushSettings, Point, Stroke, StrokeStyle } from "../stroke";
 import { eventTime, timeNow, strokeEnd, strokeStart } from "../stroke";
 import { drawInk } from "./drawInk";
 
@@ -25,6 +25,23 @@ const TAP_PX = 10;
 const CURVE_COLOR = "#06b6d4";
 const HANDLE_COLOR = "#ec4899";
 const MARQUEE_COLOR = "#4f8ef7";
+// Three layers of texture, each TEXTURE_STEP times the last one's spacing, the set spacing
+// the middle one's. A layer fades in as its spacing on screen grows from FADE_FROM_PX to
+// FADE_TO_PX. The layers share a black whose alphas add where they coincide, so the coarser
+// marks are the darker. A line runs the screen's width, so it is drawn fainter than a dot.
+const TEXTURE_LAYERS = 3;
+export const TEXTURE_STEP = 4;
+const FADE_FROM_PX = 6;
+export const FADE_TO_PX = 24;
+const DOT_ALPHA = 0.14;
+const LINE_ALPHA = 0.05;
+
+// 0 to 1, eased, on a log scale of the spacing
+function textureFade(px: number): number {
+  const u = Math.log(px / FADE_FROM_PX) / Math.log(FADE_TO_PX / FADE_FROM_PX);
+  const c = Math.max(0, Math.min(1, u));
+  return c * c * (3 - 2 * c);
+}
 
 type InkCache = WeakMap<Stroke, Drawn>;
 type Box = { x0: number; y0: number; x1: number; y1: number };
@@ -109,6 +126,46 @@ function LiveStroke({ ink }: { ink: Signal<Drawn | null> }) {
   return <g>{drawInk(ink.value, "live")}</g>;
 }
 
+// a faint ring, in screen px, seen on dark ink and white paper alike
+function Ring({ cx, cy, r }: { cx: number | string; cy: number | string; r: number }) {
+  return (
+    <g opacity="0.35" fill="none">
+      <circle cx={cx} cy={cy} r={r} stroke="#fff" stroke-width="2" />
+      <circle cx={cx} cy={cy} r={r} stroke="#1a1a1a" stroke-width="1" />
+    </g>
+  );
+}
+
+// The brush's widest, where the pen hovers, in screen px so a scroll leaves it under the
+// pointer. It trails the hardware crosshair by a frame, which stays the precise point.
+function BrushCursor({
+  at,
+  size,
+  zoom,
+}: {
+  at: Signal<{ x: number; y: number } | null>;
+  size: number;
+  zoom: Signal<number>;
+}) {
+  const p = at.value;
+  if (p === null) return null;
+  return <Ring cx={p.x} cy={p.y} r={(size * zoom.value) / 2} />;
+}
+
+// the size being adjusted, at the canvas's center as it would draw at this zoom
+function SizePreview({
+  style,
+  brushes,
+  zoom,
+}: {
+  style: Signal<StrokeStyle | null>;
+  brushes: Record<StrokeStyle, BrushSettings>;
+  zoom: Signal<number>;
+}) {
+  if (style.value === null) return null;
+  return <Ring cx="50%" cy="50%" r={(brushes[style.value].size * zoom.value) / 2} />;
+}
+
 // a mouse reports a fixed 0.5
 function pressure(e: PointerEvent): { p?: number } {
   return e.pointerType === "pen" ? { p: e.pressure } : {};
@@ -139,7 +196,7 @@ function pickStroke(
   let best: number | null = null;
   let bestD = reach;
   strokes.forEach((s, i) => {
-    const half = s.size / 2 / s.zoom;
+    const half = s.size / 2;
     const d = distToPath(s.points, x, y) - half;
     if (d <= bestD) {
       best = i;
@@ -273,6 +330,8 @@ export function Canvas() {
     timing,
     inkOptions,
     brushes,
+    sizePreview,
+    prefs,
     tool,
     selected,
     setSelected,
@@ -294,6 +353,8 @@ export function Canvas() {
     null,
   );
   const marquee = useSignal<Box | null>(null);
+  // the hovering mouse or stylus, in screen px from the canvas's corner; a finger doesn't hover
+  const hover = useSignal<{ x: number; y: number } | null>(null);
   // The drawing or selecting press: where and when it went down, whether it has moved, and
   // whether it closed something on the way. A tap that closed something does nothing else.
   const pressRef = useRef<{
@@ -326,11 +387,52 @@ export function Canvas() {
     [],
   );
 
+  // Spaced in drawing px, so it moves with the ink; dots and lines 1 screen px. A background,
+  // so a pan only moves it.
+  useSignalEffect(() => {
+    const style = view.svgRef.current!.style;
+    const { texture, spacing } = prefs.value;
+    const zoom = view.zoom.value;
+    const x = view.panX.value;
+    const y = view.panY.value;
+    const images: string[] = [];
+    const sizes: string[] = [];
+    const positions: string[] = [];
+    if (texture !== "none") {
+      for (let i = 0; i < TEXTURE_LAYERS; i++) {
+        const s = spacing * TEXTURE_STEP ** (i - 1) * zoom;
+        const fade = textureFade(s);
+        if (fade === 0) continue;
+        if (texture === "dots") {
+          const ink = `rgba(0, 0, 0, ${DOT_ALPHA * fade})`;
+          images.push(`radial-gradient(circle, ${ink} 1px, transparent 1.5px)`);
+          sizes.push(`${s}px ${s}px`);
+          // a dot at the middle of each tile
+          positions.push(`${x - s / 2}px ${y - s / 2}px`);
+        } else {
+          const ink = `rgba(0, 0, 0, ${LINE_ALPHA * fade})`;
+          images.push(`linear-gradient(${ink} 1px, transparent 1px)`);
+          sizes.push(`100% ${s}px`);
+          positions.push(`0 ${y}px`);
+        }
+      }
+    }
+    style.backgroundImage = images.join(", ");
+    style.backgroundSize = sizes.join(", ");
+    style.backgroundPosition = positions.join(", ");
+  });
+
+  function canvasPoint(e: PointerEvent): { x: number; y: number } {
+    const rect = view.svgRef.current!.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
   function handlePointerDown(e: PointerEvent) {
     // the drawer closed on this press, or a popover will on its release
     const closing =
       closingPress.current === e.pointerId || document.querySelector(":popover-open") !== null;
     closingPress.current = null;
+    hover.value = e.pointerType === "touch" ? null : canvasPoint(e);
     if (e.pointerType === "touch") {
       const touches = touchesRef.current;
       // a palm while the pen draws
@@ -393,6 +495,7 @@ export function Canvas() {
   }
 
   function handlePointerMove(e: PointerEvent) {
+    if (e.pointerType !== "touch") hover.value = canvasPoint(e);
     const touches = touchesRef.current;
     const touch = touches.get(e.pointerId);
     if (touch !== undefined && Math.hypot(e.clientX - touch.x0, e.clientY - touch.y0) > TAP_PX) {
@@ -581,11 +684,18 @@ export function Canvas() {
     <svg
       ref={view.svgRef}
       id="canvas-svg"
-      class={tool === "select" || tool === "replay" ? tool : ""}
+      class={
+        tool === "select" || tool === "replay"
+          ? tool
+          : prefs.value.cursor === "circle"
+            ? "no-crosshair"
+            : ""
+      }
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
+      onPointerLeave={() => (hover.value = null)}
       // stylus long press
       onContextMenu={(e) => e.preventDefault()}
     >
@@ -616,6 +726,10 @@ export function Canvas() {
             .map((i) => <Inspect key={i} stroke={strokes[i]} inkOptions={inkOptions} />)}
         <Marquee box={marquee} />
       </g>
+      {(tool === "pen" || tool === "brush") && prefs.value.cursor !== "crosshair" && (
+        <BrushCursor at={hover} size={brushes[tool].size} zoom={view.zoom} />
+      )}
+      <SizePreview style={sizePreview} brushes={brushes} zoom={view.zoom} />
     </svg>
   );
 }
