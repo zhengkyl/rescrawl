@@ -42,7 +42,7 @@ export function ZoomControl() {
       <div id="zoom-menu" popover="auto" ref={menuRef}>
         <button
           disabled={picked.length === 0}
-          title={picked.length === 0 ? "Select strokes with the loupe first" : undefined}
+          title={picked.length === 0 ? "Select strokes with the select tool first" : undefined}
           onClick={then(() => view.fitStrokes(picked.map((i) => strokes[i])))}
         >
           Zoom to selection

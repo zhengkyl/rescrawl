@@ -118,59 +118,84 @@ function BrushArt({ color, size }: ArtProps) {
   );
 }
 
-function LoupeArt() {
+// The pointing hand cursor on a telescoping stick: the index finger up, the other three
+// curled to their knuckles, the thumb out to the left. The palm centers on the stick.
+function HandArt() {
   return (
     <svg viewBox={ART_BOX} width="40" height={ART_HEIGHT}>
       <defs>
-        <radialGradient id="loupe-glass" cx="0.35" cy="0.35" r="0.8">
-          <stop offset="0" stop-color="#ffffff" stop-opacity="0.9" />
-          <stop offset="0.4" stop-color="#cfe6f7" stop-opacity="0.6" />
-          <stop offset="1" stop-color="#7fa9c9" stop-opacity="0.7" />
-        </radialGradient>
-        <Shade id="loupe-metal" dark="#6e5a2a" mid="#c8a64e" light="#f5e2a0" />
-        <Shade id="loupe-handle" dark="#141414" mid="#2e2620" light="#6a5a4c" />
+        <Shade id="hand-chrome" dark="#6b6f75" mid="#b9bec4" light="#f2f4f6" />
+        <Shade id="hand-collar" dark="#3c3f44" mid="#80858c" light="#c9cdd2" />
+        <Shade id="hand-grip" dark="#141414" mid="#2e2e33" light="#6a6a72" />
       </defs>
-      <circle cx="20" cy="19" r="15" fill="url(#loupe-glass)" />
-      <circle cx="20" cy="19" r="15" fill="none" stroke="url(#loupe-metal)" stroke-width="4" />
-      <path
-        d="M11 14a10 10 0 0 1 7-6"
-        stroke="#fff"
-        stroke-width="2"
-        stroke-linecap="round"
-        fill="none"
-        opacity="0.8"
-      />
-      <rect x="17.5" y="34" width="5" height="12" fill="url(#loupe-metal)" />
-      <rect x="14" y="46" width="12" height="74" rx="5" fill="url(#loupe-handle)" />
-      <rect x="16" y="50" width="2" height="64" rx="1" fill="#fff" opacity="0.25" />
+      {/* thinner sections slide out of thicker ones, each joint ringed by a collar */}
+      <rect x="18.5" y="30" width="3" height="30" fill="url(#hand-chrome)" />
+      <rect x="17.75" y="58" width="4.5" height="26" fill="url(#hand-chrome)" />
+      <rect x="16.5" y="82" width="7" height="38" rx="2" fill="url(#hand-grip)" />
+      <rect x="17.25" y="57" width="5.5" height="3" rx="0.75" fill="url(#hand-collar)" />
+      <rect x="16" y="81" width="8" height="3.5" rx="1" fill="url(#hand-collar)" />
+      <rect x="18" y="88" width="1.5" height="28" rx="0.75" fill="#fff" opacity="0.25" />
+      <g stroke="#111" stroke-linejoin="round" stroke-linecap="round">
+        <path
+          d="M13 21V4a2.75 2.75 0 0 1 5.5 0v11a2.25 2.25 0 0 1 4.5 0v1a2.25 2.25 0 0 1 4.5 0v1.5a1.75 1.75 0 0 1 3.5 0V29c0 5-3 9-8 9h-5c-3 0-5-1.5-6.5-4L6 27a2.4 2.4 0 0 1 3.6-3.1L13 27.5z"
+          fill="#fff"
+          stroke-width="1.5"
+        />
+        <path d="M18.5 15v5M23 16v4.5M27.5 17.5v4" stroke-width="1.2" />
+      </g>
     </svg>
   );
 }
 
-function HourglassArt() {
+// three columns of keys, `rows` of them from `top`
+function remoteKeys(top: number, rows: number) {
+  return Array.from({ length: rows * 3 }, (_, i) => (
+    <rect
+      key={`${top},${i}`}
+      x={11.5 + (i % 3) * 6.25}
+      y={top + Math.floor(i / 3) * 6}
+      width="4.5"
+      height="3.5"
+      rx="1.2"
+    />
+  ));
+}
+
+const REMOTE_COLORS = ["#b5484b", "#3f8f5f", "#c9a53e", "#3f6fb0"];
+
+// A media remote standing on end, its buttons unlabeled: power and another at its top, a
+// keypad, a row of colors, then a pad of arrows, rockers, and another keypad, which show as
+// it's taken up.
+function RemoteArt() {
   return (
     <svg viewBox={ART_BOX} width="40" height={ART_HEIGHT}>
       <defs>
-        <linearGradient id="hourglass-glass" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0" stop-color="#9fc3dc" stop-opacity="0.55" />
-          <stop offset="0.3" stop-color="#ffffff" stop-opacity="0.85" />
-          <stop offset="1" stop-color="#7fa9c9" stop-opacity="0.55" />
-        </linearGradient>
-        <Shade id="hourglass-wood" dark="#3b230f" mid="#7a4a22" light="#c08a52" />
+        <Shade id="remote-body" dark="#141416" mid="#2a2b30" light="#5a5c66" />
       </defs>
+      <rect x="6" y="0" width="28" height="120" rx="6" fill="url(#remote-body)" />
+      <rect x="8.5" y="9" width="1.5" height="102" rx="0.75" fill="#fff" opacity="0.15" />
+      <circle cx="12.5" cy="5.5" r="2" fill="#c8383d" />
+      {REMOTE_COLORS.map((c, i) => (
+        <rect key={c} x={10 + i * 5.25} y="30.5" width="4.5" height="2.5" rx="1" fill={c} />
+      ))}
+      <g fill="#c4c7cd" stroke="#8c9098" stroke-width="0.5">
+        <circle cx="27.5" cy="5.5" r="2" />
+        {remoteKeys(10.5, 3)}
+        <circle cx="20" cy="44.5" r="7.5" />
+        <circle cx="20" cy="44.5" r="3.2" />
+        <circle cx="12.5" cy="55.5" r="2.2" />
+        <circle cx="27.5" cy="55.5" r="2.2" />
+        <rect x="11.5" y="60.5" width="5" height="14" rx="2.5" />
+        <rect x="23.5" y="60.5" width="5" height="14" rx="2.5" />
+        <rect x="18" y="62.5" width="4" height="3" rx="1" />
+        <rect x="18" y="68.5" width="4" height="3" rx="1" />
+        {remoteKeys(80, 6)}
+      </g>
       <path
-        d="M11 7h18c0 12-7 15-7 23 0 8 7 11 7 25H11c0-14 7-17 7-25 0-8-7-11-7-23z"
-        fill="url(#hourglass-glass)"
+        d="M20 38v1.5M20 49.5v1.5M13.5 44.5h1.5M25 44.5h1.5"
+        stroke="#6e727a"
+        stroke-linecap="round"
       />
-      <path d="M13.5 13h13c-1 6-5 9-5.8 14h-1.4c-.8-5-4.8-8-5.8-14z" fill="#e2b35c" />
-      <rect x="19.5" y="29" width="1" height="18" fill="#e2b35c" />
-      <path d="M12 55c2-5 5-7.5 8-8.5 3 1 6 3.5 8 8.5z" fill="#e2b35c" />
-      <rect x="8" y="6" width="2.5" height="50" fill="url(#hourglass-wood)" />
-      <rect x="29.5" y="6" width="2.5" height="50" fill="url(#hourglass-wood)" />
-      <rect x="5" y="2" width="30" height="5" rx="1.5" fill="url(#hourglass-wood)" />
-      <rect x="5" y="55" width="30" height="5" rx="1.5" fill="url(#hourglass-wood)" />
-      <rect x="15" y="60" width="10" height="60" rx="2" fill="url(#hourglass-wood)" />
-      <rect x="17" y="63" width="2" height="54" rx="1" fill="#fff" opacity="0.25" />
     </svg>
   );
 }
@@ -178,12 +203,8 @@ function HourglassArt() {
 const TOOLS: { id: Tool; title: string; Art: (p: ArtProps) => JSX.Element }[] = [
   { id: "pen", title: "Pen: draws centerlines", Art: PenArt },
   { id: "brush", title: "Brush: draws smooth outlines", Art: BrushArt },
-  { id: "select", title: "Loupe: click or drag to select strokes, shift to add", Art: LoupeArt },
-  {
-    id: "replay",
-    title: "Hourglass: replay the drawing",
-    Art: HourglassArt,
-  },
+  { id: "select", title: "Select: click or drag to select strokes, shift to add", Art: HandArt },
+  { id: "replay", title: "Remote: replay the drawing", Art: RemoteArt },
 ];
 
 // joined to the tray's right end
@@ -273,7 +294,6 @@ export function Tools() {
   const press = useRef<Press | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-
   function toolDown(e: PointerEvent, id: Tool) {
     if (e.button !== 0) return;
     const held = tool === id;
